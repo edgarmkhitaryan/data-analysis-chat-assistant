@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-analysis-chat-assistant"
+version = "0.1.0"
+description = "A conversational agent that turns natural-language business questions into validated SQL over BigQuery and returns analyst-grade reports."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "mkhitaryan" }]
+dynamic = ["dependencies", "optional-dependencies"]
+
+[project.scripts]
+assistant = "assistant.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Single source of truth for dependencies: the requirements files. This keeps
+# `pip install -e .` and `pip install -r requirements.txt` perfectly in sync.
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.dynamic.optional-dependencies]
+dev = { file = ["requirements-dev.txt"] }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+ignore = ["E501"] # line length is handled by the formatter
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,26 @@
+# Runtime dependencies for the Data Analysis Chat Assistant.
+# Install with `make install` (editable + dev) or `pip install -r requirements.txt`.
+# Floors are set to the tested-compatible versions; see plan/004 for the rationale.
+
+# --- Orchestration, LLM, embeddings ---
+langgraph>=1.0,<2
+langchain-core>=1.0,<2
+langchain-google-genai>=4.0,<5
+
+# --- Data warehouse ---
+google-cloud-bigquery>=3.13
+db-dtypes>=1.2
+pandas>=2.0
+
+# --- Configuration & validation ---
+pydantic>=2.6
+pydantic-settings>=2.2
+python-dotenv>=1.0
+
+# --- Resilience & SQL safety ---
+tenacity>=8.2
+sqlglot>=25.0
+
+# --- Persona config & CLI presentation ---
+pyyaml>=6.0
+rich>=13.0

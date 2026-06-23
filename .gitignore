@@ -1,0 +1,33 @@
+# Assignment-private — never commit (local planning + the brief itself)
+plan/
+task.md
+
+# Secrets — never commit the real environment file
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Runtime artifacts (created by later phases)
+logs/
+traces/
+data/*.db
+data/golden_index/
+*.sqlite

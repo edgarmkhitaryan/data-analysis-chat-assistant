@@ -1,0 +1,75 @@
+"""Typed application settings, loaded and validated once at startup.
+
+All configuration comes from environment variables (a local ``.env`` in the
+prototype; real environment / Secret Manager in production). Call
+:func:`get_settings` to obtain a single, cached, validated view of that
+configuration. Required values that are missing fail fast at first access with a
+clear pydantic error, instead of surfacing as obscure failures deep in a node.
+"""
+
+from functools import lru_cache
+from typing import Annotated, Literal
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Validated configuration for the assistant. One field per ``.env`` variable."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # --- Required credentials ---
+    gemini_api_key: SecretStr = Field(alias="GEMINI_API_KEY")
+    google_cloud_project: str = Field(alias="GOOGLE_CLOUD_PROJECT")
+
+    # --- BigQuery ---
+    bq_dataset: str = Field("bigquery-public-data.thelook_ecommerce", alias="BQ_DATASET")
+    max_bytes_billed: int = Field(2_000_000_000, alias="MAX_BYTES_BILLED")
+
+    # --- Models ---
+    llm_model: str = Field("gemini-2.5-flash", alias="LLM_MODEL")
+    llm_model_heavy: str = Field("gemini-2.5-pro", alias="LLM_MODEL_HEAVY")
+    embedding_model: str = Field("models/gemini-embedding-001", alias="EMBEDDING_MODEL")
+
+    # --- Agent behavior ---
+    max_sql_attempts: int = Field(3, alias="MAX_SQL_ATTEMPTS")
+    contextualize_confidence_floor: float = Field(0.6, alias="CONTEXTUALIZE_CONFIDENCE_FLOOR")
+    max_sub_questions: int = Field(4, alias="MAX_SUB_QUESTIONS")
+    max_history_messages: int = Field(10, alias="MAX_HISTORY_MESSAGES")
+
+    # --- Identity & persona ---
+    default_persona: str = Field("concise_exec", alias="DEFAULT_PERSONA")
+    default_user: str = Field("manager_a", alias="DEFAULT_USER")
+
+    # --- PII masking ---
+    # ``NoDecode`` stops pydantic-settings from JSON-decoding the env value so our
+    # validator can accept a plain comma-separated list (e.g. "email,postal_code").
+    pii_mask_columns: Annotated[list[str], NoDecode] = Field(
+        default=["email", "street_address", "postal_code", "latitude", "longitude", "user_geom"],
+        alias="PII_MASK_COLUMNS",
+    )
+    pii_mask_style: Literal["partial", "redact"] = Field("partial", alias="PII_MASK_STYLE")
+
+    # --- Observability ---
+    langsmith_api_key: SecretStr | None = Field(None, alias="LANGSMITH_API_KEY")
+    log_level: str = Field("INFO", alias="LOG_LEVEL")
+
+    @field_validator("pii_mask_columns", mode="before")
+    @classmethod
+    def _split_csv(cls, value: object) -> object:
+        """Accept either a comma-separated string (from env) or an actual list."""
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return the process-wide settings, reading and validating ``.env`` once."""
+    return Settings()
