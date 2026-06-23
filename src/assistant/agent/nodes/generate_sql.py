@@ -22,6 +22,21 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _exemplars_block(state: AgentState) -> str:
+    """Format retrieved Trios as question->SQL few-shot exemplars, if any."""
+    trios = state.get("retrieved_trios") or []
+    if not trios:
+        return ""
+    blocks = [
+        "Here are examples of how analysts answered similar questions. Use them as "
+        "guidance for table choice, joins, and business conventions — adapt the "
+        "logic to the current question; do not copy them blindly.",
+    ]
+    for i, trio in enumerate(trios, start=1):
+        blocks.append(f"\nExample {i}:\nQuestion: {trio.question}\nSQL:\n{trio.sql}")
+    return "\n".join(blocks) + "\n\n"
+
+
 def _extract_sql(content: object) -> str:
     """Pull a clean SQL statement out of the model's reply.
 
@@ -37,9 +52,14 @@ def _extract_sql(content: object) -> str:
 def generate_sql(state: AgentState, deps: AgentDeps) -> dict:
     """Generate SQL for the current question (incorporating any prior error)."""
     chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    human = (
+        f"{state['schema_context']}\n\n"
+        f"{_exemplars_block(state)}"
+        f"Question: {state['question']}\n\nSQL:"
+    )
     messages = [
         SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=f"{state['schema_context']}\n\nQuestion: {state['question']}\n\nSQL:"),
+        HumanMessage(content=human),
     ]
     if state.get("last_error"):
         messages.append(

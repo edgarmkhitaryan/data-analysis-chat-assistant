@@ -12,6 +12,9 @@ google-cloud-bigquery>=3.13
 db-dtypes>=1.2
 pandas>=2.0
 
+# --- Golden Bucket vector store (in-process cosine) ---
+numpy>=1.26
+
 # --- Configuration & validation ---
 pydantic>=2.6
 pydantic-settings>=2.2

@@ -16,6 +16,9 @@ install: ## Install runtime + dev dependencies into the venv (editable)
 check: ## Verify Gemini + BigQuery connectivity (Phase 0 smoke test)
 	$(PYTHON) scripts/check_access.py
 
+ingest: ## Build/refresh the Golden Bucket embedding index
+	$(PYTHON) scripts/ingest_golden.py
+
 run: ## Start the CLI chat assistant (added in Phase 2)
 	$(PYTHON) -m assistant.cli
 

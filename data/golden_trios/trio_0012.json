@@ -1,0 +1,18 @@
+{
+  "id": "trio_0012",
+  "question": "What tables and key columns are available in the database?",
+  "sql": "SELECT\n  table_name,\n  column_name,\n  data_type\nFROM `bigquery-public-data.thelook_ecommerce.INFORMATION_SCHEMA.COLUMNS`\nWHERE table_name IN ('orders', 'order_items', 'products', 'users')\nORDER BY table_name, ordinal_position",
+  "report": "The dataset has four core tables. orders (one row per order) holds the order lifecycle and timestamps. order_items (one row per line item) holds sale_price, the source of revenue. products (one row per SKU) holds category, brand, cost, and retail_price. users (one row per customer) holds demographics and location - and the dataset's PII. Join order_items to products on product_id = id, to orders on order_id, and to users on user_id.",
+  "tags": [
+    "db-structure",
+    "metadata",
+    "schema"
+  ],
+  "tables": [
+    "INFORMATION_SCHEMA"
+  ],
+  "created_by": "analyst",
+  "created_at": "2026-04-15",
+  "quality": "approved",
+  "source": "seed"
+}

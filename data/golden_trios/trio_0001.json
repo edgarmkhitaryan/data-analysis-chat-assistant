@@ -1,0 +1,19 @@
+{
+  "id": "trio_0001",
+  "question": "Who are our top 10 customers by total spend?",
+  "sql": "SELECT\n  u.id AS user_id,\n  CONCAT(u.first_name, ' ', u.last_name) AS customer_name,\n  ROUND(SUM(oi.sale_price), 2) AS total_spend,\n  COUNT(DISTINCT oi.order_id) AS orders\nFROM `bigquery-public-data.thelook_ecommerce.order_items` AS oi\nJOIN `bigquery-public-data.thelook_ecommerce.users` AS u\n  ON oi.user_id = u.id\nGROUP BY user_id, customer_name\nORDER BY total_spend DESC\nLIMIT 10",
+  "report": "The 10 highest-spending customers each contributed roughly $1,455 to $1,803 in lifetime sales. James Brown leads at $1,803.46 across 3 orders, followed by George Mitchell ($1,722.42) and Justin Miller ($1,694.18). Most top spenders placed 3-4 orders, so their high lifetime value is driven by repeat purchasing rather than single large baskets - a sign that retention investment pays off with this segment.",
+  "tags": [
+    "customer-behavior",
+    "revenue",
+    "ranking"
+  ],
+  "tables": [
+    "order_items",
+    "users"
+  ],
+  "created_by": "analyst",
+  "created_at": "2026-03-04",
+  "quality": "approved",
+  "source": "seed"
+}

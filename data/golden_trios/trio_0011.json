@@ -1,0 +1,19 @@
+{
+  "id": "trio_0011",
+  "question": "Which marketing traffic sources bring in the most revenue?",
+  "sql": "SELECT\n  u.traffic_source,\n  ROUND(SUM(oi.sale_price), 2) AS revenue,\n  COUNT(DISTINCT u.id) AS customers\nFROM `bigquery-public-data.thelook_ecommerce.order_items` AS oi\nJOIN `bigquery-public-data.thelook_ecommerce.users` AS u\n  ON oi.user_id = u.id\nGROUP BY u.traffic_source\nORDER BY revenue DESC",
+  "report": "Search is by far the dominant acquisition channel, driving $7.63M from 56,165 customers - more than 4x the next channel. Organic follows at $1.63M, with Facebook ($629K), Email ($542K), and Display ($432K) contributing smaller shares. Search visibility is clearly the company's highest-leverage marketing channel.",
+  "tags": [
+    "marketing",
+    "revenue",
+    "comparative"
+  ],
+  "tables": [
+    "order_items",
+    "users"
+  ],
+  "created_by": "analyst",
+  "created_at": "2026-04-08",
+  "quality": "approved",
+  "source": "seed"
+}

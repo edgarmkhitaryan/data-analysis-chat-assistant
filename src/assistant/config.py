@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     max_sub_questions: int = Field(4, alias="MAX_SUB_QUESTIONS")
     max_history_messages: int = Field(10, alias="MAX_HISTORY_MESSAGES")
 
+    # --- Golden Bucket (Hybrid Intelligence) ---
+    golden_top_k: int = Field(3, alias="GOLDEN_TOP_K")
+    golden_sim_floor: float = Field(0.68, alias="GOLDEN_SIM_FLOOR")
+    golden_trios_dir: str = Field("data/golden_trios", alias="GOLDEN_TRIOS_DIR")
+    golden_index_dir: str = Field("data/golden_index", alias="GOLDEN_INDEX_DIR")
+
     # --- Identity & persona ---
     default_persona: str = Field("concise_exec", alias="DEFAULT_PERSONA")
     default_user: str = Field("manager_a", alias="DEFAULT_USER")

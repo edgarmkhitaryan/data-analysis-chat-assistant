@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from assistant.bigquery import BigQueryRunner
 from assistant.config import Settings, get_settings
+from assistant.golden import GoldenRetriever
 
 
 @dataclass(frozen=True)
@@ -16,10 +17,15 @@ class AgentDeps:
     """Resources the agent's nodes depend on."""
 
     runner: BigQueryRunner
+    retriever: GoldenRetriever
     settings: Settings
 
     @classmethod
     def create(cls, settings: Settings | None = None) -> "AgentDeps":
         """Build dependencies from application settings (the production path)."""
         settings = settings or get_settings()
-        return cls(runner=BigQueryRunner.from_settings(settings), settings=settings)
+        return cls(
+            runner=BigQueryRunner.from_settings(settings),
+            retriever=GoldenRetriever.from_settings(settings),
+            settings=settings,
+        )

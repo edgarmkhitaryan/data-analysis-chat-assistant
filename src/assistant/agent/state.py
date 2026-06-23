@@ -12,6 +12,8 @@ from typing import Annotated, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+from assistant.golden.models import Trio
+
 
 class AgentState(TypedDict, total=False):
     """Typed conversation + analysis state for one thread.
@@ -28,6 +30,10 @@ class AgentState(TypedDict, total=False):
 
     # --- The question under analysis ---
     question: str
+
+    # --- Hybrid Intelligence (Golden Bucket) ---
+    retrieved_trios: list[Trio]
+    retrieval_cold: bool
 
     # --- Analysis pipeline ---
     schema_context: str

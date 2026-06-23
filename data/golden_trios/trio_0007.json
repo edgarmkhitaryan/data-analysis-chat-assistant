@@ -1,0 +1,19 @@
+{
+  "id": "trio_0007",
+  "question": "What are our slowest-moving products by units sold?",
+  "sql": "SELECT\n  p.name AS product_name,\n  p.category,\n  COUNT(oi.id) AS units_sold\nFROM `bigquery-public-data.thelook_ecommerce.products` AS p\nLEFT JOIN `bigquery-public-data.thelook_ecommerce.order_items` AS oi\n  ON oi.product_id = p.id\nGROUP BY product_name, p.category\nORDER BY units_sold ASC, product_name\nLIMIT 10",
+  "report": "Several catalog products have never sold. This query surfaces 10 items with zero units sold, spanning Blazers & Jackets, Jeans, Accessories, and Dresses - tied-up inventory and prime candidates for markdown, bundling, or delisting. Note the LEFT JOIN from products to order_items: it is required so unsold products, which have no order rows, still appear with a count of zero.",
+  "tags": [
+    "product-performance",
+    "inventory",
+    "slow-movers"
+  ],
+  "tables": [
+    "products",
+    "order_items"
+  ],
+  "created_by": "analyst",
+  "created_at": "2026-03-25",
+  "quality": "approved",
+  "source": "seed"
+}

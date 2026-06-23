@@ -1,0 +1,17 @@
+{
+  "id": "trio_0002",
+  "question": "How many of our customers are repeat buyers versus one-time buyers?",
+  "sql": "SELECT\n  IF(order_count > 1, 'Repeat buyer', 'One-time buyer') AS customer_type,\n  COUNT(*) AS customers,\n  SUM(order_count) AS total_orders\nFROM (\n  SELECT user_id, COUNT(DISTINCT order_id) AS order_count\n  FROM `bigquery-public-data.thelook_ecommerce.orders`\n  GROUP BY user_id\n)\nGROUP BY customer_type\nORDER BY customers DESC",
+  "report": "Of about 80,100 customers, 49,966 (62%) bought only once while 30,136 (38%) are repeat buyers. Yet repeat buyers account for 75,528 of the ~125,500 total orders (60%) - so the 38% who return generate the majority of order volume. The takeaway: converting one-time buyers into repeat buyers is the single biggest growth lever.",
+  "tags": [
+    "customer-behavior",
+    "retention"
+  ],
+  "tables": [
+    "orders"
+  ],
+  "created_by": "analyst",
+  "created_at": "2026-03-04",
+  "quality": "approved",
+  "source": "seed"
+}

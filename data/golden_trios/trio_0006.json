@@ -1,0 +1,19 @@
+{
+  "id": "trio_0006",
+  "question": "Which products deliver the most total profit?",
+  "sql": "SELECT\n  p.name AS product_name,\n  p.category,\n  ROUND(SUM(oi.sale_price - p.cost), 2) AS total_profit\nFROM `bigquery-public-data.thelook_ecommerce.order_items` AS oi\nJOIN `bigquery-public-data.thelook_ecommerce.products` AS p\n  ON oi.product_id = p.id\nGROUP BY product_name, p.category\nORDER BY total_profit DESC\nLIMIT 10",
+  "report": "The most profitable products are concentrated in premium outerwear and active wear. ASICS Cushion Low Socks (3-pack) lead on total profit at $5,820.74, with Canada Goose's Chateau Jacket ($5,731.08) and the Nobis Yatesy Parka ($5,681.00) close behind. High-priced jackets recur throughout the top 10 - they pair high price points with healthy per-unit margins (profit = sale_price - cost).",
+  "tags": [
+    "product-performance",
+    "profit",
+    "margin"
+  ],
+  "tables": [
+    "order_items",
+    "products"
+  ],
+  "created_by": "analyst",
+  "created_at": "2026-03-18",
+  "quality": "approved",
+  "source": "seed"
+}

@@ -27,6 +27,24 @@ _SYSTEM_PROMPT = (
 # still receives the true total row count for context.
 _MAX_ROWS_IN_PROMPT = 100
 
+# Use at most this many Trios as report-style exemplars (one is usually enough to
+# anchor structure/tone without bloating the prompt).
+_MAX_STYLE_EXEMPLARS = 2
+
+
+def _style_exemplars_block(state: AgentState) -> str:
+    """Format retrieved Trios as question->report style exemplars, if any."""
+    trios = (state.get("retrieved_trios") or [])[:_MAX_STYLE_EXEMPLARS]
+    if not trios:
+        return ""
+    blocks = [
+        "Match the structure and tone of these analyst report examples "
+        "(lead with the headline finding, then concise supporting detail):",
+    ]
+    for i, trio in enumerate(trios, start=1):
+        blocks.append(f"\nExample {i}:\nQuestion: {trio.question}\nReport:\n{trio.report}")
+    return "\n".join(blocks) + "\n\n"
+
 
 def synthesize_report(state: AgentState, deps: AgentDeps) -> dict:
     """Produce the written report and append it to the conversation."""
@@ -47,7 +65,7 @@ def synthesize_report(state: AgentState, deps: AgentDeps) -> dict:
     else:
         results_section = "Query results: the query returned no rows."
 
-    human = f"Question: {state['question']}\n\n{results_section}"
+    human = f"{_style_exemplars_block(state)}Question: {state['question']}\n\n{results_section}"
     reply = chat.invoke([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=human)])
     report = as_text(reply.content).strip()
     return {"report": report, "messages": [AIMessage(content=report)]}
