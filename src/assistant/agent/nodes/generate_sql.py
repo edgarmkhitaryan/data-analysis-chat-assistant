@@ -1,0 +1,58 @@
+"""SQL generation node: turns the question + schema context into a SELECT query.
+
+If a previous attempt left an error on the state, it is fed back to the model so
+the regenerated query can fix it. The bounded self-correction *loop* that drives
+this is added in Phase 8; here the node simply produces (or re-produces) SQL.
+"""
+
+import re
+
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from assistant.agent.dependencies import AgentDeps
+from assistant.agent.nodes.common import as_text
+from assistant.agent.state import AgentState
+from assistant.llm import get_chat_model
+
+_SYSTEM_PROMPT = (
+    "You are an expert analytics engineer who writes BigQuery Standard SQL for a "
+    "retail company. Given the database schema and a business question, return "
+    "exactly ONE SQL SELECT query that answers it. Return only the SQL — no "
+    "explanation and no markdown fences."
+)
+
+
+def _extract_sql(content: object) -> str:
+    """Pull a clean SQL statement out of the model's reply.
+
+    Tolerates fenced code blocks (```sql ... ```) and trims a trailing semicolon.
+    """
+    text = as_text(content).strip()
+    fenced = re.search(r"```(?:sql)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1)
+    return text.strip().rstrip(";").strip()
+
+
+def generate_sql(state: AgentState, deps: AgentDeps) -> dict:
+    """Generate SQL for the current question (incorporating any prior error)."""
+    chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    messages = [
+        SystemMessage(content=_SYSTEM_PROMPT),
+        HumanMessage(content=f"{state['schema_context']}\n\nQuestion: {state['question']}\n\nSQL:"),
+    ]
+    if state.get("last_error"):
+        messages.append(
+            HumanMessage(
+                content=(
+                    f"The previous query failed with: {state['last_error']}\n"
+                    "Return only the corrected SQL."
+                )
+            )
+        )
+    reply = chat.invoke(messages)
+    return {
+        "generated_sql": _extract_sql(reply.content),
+        "sql_attempts": state.get("sql_attempts", 0) + 1,
+        "last_error": None,
+    }
