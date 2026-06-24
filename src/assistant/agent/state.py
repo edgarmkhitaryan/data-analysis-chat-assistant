@@ -30,8 +30,12 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     run_id: str
 
-    # --- The question under analysis ---
+    # --- Contextualization (follow-up -> standalone) ---
+    raw_question: str
     question: str
+    history_used: bool
+    needs_clarification: bool
+    clarifying_question: str | None
 
     # --- Routing & preferences ---
     intent: Literal["analysis", "update_preference"]

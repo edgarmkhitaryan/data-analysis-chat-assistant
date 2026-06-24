@@ -2,8 +2,8 @@
 
 A thin REPL: it marshals user input into the graph and renders the result. It
 holds no business logic — every decision lives in the graph's nodes. Each turn
-runs on a persisted ``thread_id`` so the checkpointer can support multi-turn
-follow-ups (the contextualization that uses this lands in Phase 3.5).
+runs on a persisted ``thread_id``; the ``contextualize`` node uses that history
+to resolve follow-ups, and clarifications are rendered distinctly.
 """
 
 import argparse
@@ -36,6 +36,7 @@ def _run_turn(graph, console: Console, question: str, user_id: str, thread_id: s
     """Run one analysis turn and render the SQL + report."""
     initial = {
         "messages": [HumanMessage(content=question)],
+        "raw_question": question,
         "question": question,
         "user_id": user_id,
         "thread_id": thread_id,
@@ -46,6 +47,22 @@ def _run_turn(graph, console: Console, question: str, user_id: str, thread_id: s
     config = {"configurable": {"thread_id": thread_id}}
     with console.status("[dim]thinking…[/]", spinner="dots"):
         result = graph.invoke(initial, config=config)
+
+    # Show the follow-up rewrite when contextualization changed the question.
+    if result.get("history_used") and result.get("question") and result["question"] != question:
+        console.print(f"[dim]↳ interpreted as: {result['question']}[/]")
+
+    # A clarification request is a terminal turn — render it distinctly, no SQL.
+    if result.get("needs_clarification"):
+        console.print(
+            Panel(
+                result.get("report", ""),
+                title="Clarification",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        return
 
     sql = result.get("generated_sql")
     if sql and not result.get("last_error"):

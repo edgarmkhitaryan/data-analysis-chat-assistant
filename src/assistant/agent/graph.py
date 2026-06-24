@@ -1,11 +1,15 @@
-"""Assembles the analysis graph (Phase 2 happy path).
+"""Assembles the agent graph.
 
-Flow (plan/005 §3 order: guard -> load -> route):
+Flow (plan/005 §3): contextualize -> guard -> load -> route.
 
-    START -> guard_input -> load_context -> route --(update_preference)--> update_prefs -> END
-                                              |
-                                          (analysis)
-                                              v
+    START -> contextualize --(ambiguous)--> clarify -> END
+                  |
+              (resolved / first turn)
+                  v
+    guard_input -> load_context -> route --(update_preference)--> update_prefs -> END
+                                     |
+                                 (analysis)
+                                     v
     retrieve_golden -> get_schema -> generate_sql -> validate_sql
                                           |              |
                                       (invalid)      (error)
@@ -14,16 +18,20 @@ Flow (plan/005 §3 order: guard -> load -> route):
     execute_sql --(rows)--> synthesize_report -> END
     degrade -> END
 
-Phase 6 extends ``guard_input`` (injection pre-filter + manage_reports/rejected
-intents). Later phases insert more nodes around this core (contextualize/clarify
-before it, mask before report, oversight branch) without changing these pieces.
+Phase 3.5b adds decompose/synthesize for compound questions (extracting the
+retrieve->report pipeline into a reusable subgraph). Phase 6 extends
+``guard_input`` (injection pre-filter + manage_reports/rejected). PII masking
+(Phase 5) inserts a ``mask_pii`` node on the execute->report edge.
 """
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 
 from assistant.agent.dependencies import AgentDeps
+from assistant.agent.nodes.clarify import clarify
+from assistant.agent.nodes.contextualize import contextualize
 from assistant.agent.nodes.degrade import degrade
 from assistant.agent.nodes.execute_sql import execute_sql
 from assistant.agent.nodes.generate_sql import generate_sql
@@ -35,6 +43,23 @@ from assistant.agent.nodes.schema import get_schema
 from assistant.agent.nodes.update_prefs import update_prefs
 from assistant.agent.nodes.validate_sql import validate_sql
 from assistant.agent.state import AgentState
+
+# Our typed state values (pydantic) must be explicitly allow-listed for the
+# checkpointer's msgpack (de)serialization — otherwise LangGraph warns on every
+# multi-turn read and will block them in a future version.
+_ALLOWED_STATE_TYPES = {
+    ("assistant.persona.loader", "Persona"),
+    ("assistant.memory.profiles", "UserPrefs"),
+    ("assistant.golden.models", "Trio"),
+}
+
+
+def _state_serde() -> JsonPlusSerializer:
+    return JsonPlusSerializer(allowed_msgpack_modules=_ALLOWED_STATE_TYPES)
+
+
+def _after_contextualize(state: AgentState) -> str:
+    return "clarify" if state.get("needs_clarification") else "guard"
 
 
 def _route_by_intent(state: AgentState) -> str:
@@ -62,11 +87,13 @@ def build_graph(
     """
     deps = deps or AgentDeps.create()
     if checkpointer is None:
-        checkpointer = InMemorySaver()
+        checkpointer = InMemorySaver(serde=_state_serde())
 
     builder = StateGraph(AgentState)
 
     # Nodes that need shared resources are wrapped so each is a plain `state -> dict`.
+    builder.add_node("contextualize", lambda state: contextualize(state, deps))
+    builder.add_node("clarify", clarify)
     builder.add_node("guard_input", lambda state: guard_input(state, deps))
     builder.add_node("load_context", lambda state: load_context(state, deps))
     builder.add_node("update_prefs", lambda state: update_prefs(state, deps))
@@ -78,7 +105,13 @@ def build_graph(
     builder.add_node("synthesize_report", lambda state: synthesize_report(state, deps))
     builder.add_node("degrade", degrade)
 
-    builder.add_edge(START, "guard_input")
+    builder.add_edge(START, "contextualize")
+    builder.add_conditional_edges(
+        "contextualize",
+        _after_contextualize,
+        {"clarify": "clarify", "guard": "guard_input"},
+    )
+    builder.add_edge("clarify", END)
     builder.add_edge("guard_input", "load_context")
     builder.add_conditional_edges(
         "load_context",
