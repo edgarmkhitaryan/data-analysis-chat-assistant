@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     max_bytes_billed: int = Field(2_000_000_000, alias="MAX_BYTES_BILLED")
 
     # --- Models ---
-    llm_model: str = Field("gemini-2.5-flash", alias="LLM_MODEL")
-    llm_model_heavy: str = Field("gemini-2.5-pro", alias="LLM_MODEL_HEAVY")
+    llm_model: str = Field("gemini-3.1-flash-lite", alias="LLM_MODEL")
+    llm_model_heavy: str = Field("gemini-3.1-pro-preview", alias="LLM_MODEL_HEAVY")
     embedding_model: str = Field("models/gemini-embedding-001", alias="EMBEDDING_MODEL")
 
     # --- Agent behavior ---
