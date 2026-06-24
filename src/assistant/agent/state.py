@@ -7,12 +7,14 @@ phases add their own fields (contextualization, routing, compound questions, PII
 oversight, persona/prefs) without disturbing these.
 """
 
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 from assistant.golden.models import Trio
+from assistant.memory.profiles import UserPrefs
+from assistant.persona.loader import Persona
 
 
 class AgentState(TypedDict, total=False):
@@ -30,6 +32,14 @@ class AgentState(TypedDict, total=False):
 
     # --- The question under analysis ---
     question: str
+
+    # --- Routing & preferences ---
+    intent: Literal["analysis", "update_preference"]
+    pref_update: dict | None
+
+    # --- Persona (org tone) + user preferences (format/verbosity) ---
+    persona: Persona
+    user_prefs: UserPrefs
 
     # --- Hybrid Intelligence (Golden Bucket) ---
     retrieved_trios: list[Trio]

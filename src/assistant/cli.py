@@ -14,15 +14,18 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from assistant.agent.dependencies import AgentDeps
 from assistant.agent.graph import build_graph
 from assistant.config import get_settings
 
 _HELP = """\
 Commands:
-  /new      start a new conversation thread
-  /whoami   show the current user and thread
-  /help     show this help
-  /exit     quit"""
+  /login <id>  switch the current manager (drives preferences + ownership)
+  /prefs       show the current user's saved preferences
+  /whoami      show the current user and thread
+  /new         start a new conversation thread
+  /help        show this help
+  /exit        quit"""
 
 
 def _new_thread_id() -> str:
@@ -68,9 +71,10 @@ def main() -> None:
             border_style="cyan",
         )
     )
-    graph = build_graph()
+    deps = AgentDeps.create(settings)
+    graph = build_graph(deps=deps)
     thread_id = _new_thread_id()
-    console.print(f"[dim]user={user_id}  thread={thread_id}[/]")
+    console.print(f"[dim]user={user_id}  persona={settings.default_persona}  thread={thread_id}[/]")
 
     while True:
         try:
@@ -93,6 +97,21 @@ def main() -> None:
             continue
         if text == "/whoami":
             console.print(f"[dim]user={user_id}  thread={thread_id}[/]")
+            continue
+        if text.startswith("/login"):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2 and parts[1].strip():
+                user_id = parts[1].strip()
+                console.print(f"[dim]now acting as {user_id}[/]")
+            else:
+                console.print("[yellow]usage: /login <user_id>[/]")
+            continue
+        if text == "/prefs":
+            prefs = deps.profiles.get(user_id)
+            console.print(
+                f"[dim]format={prefs.format}  verbosity={prefs.verbosity}  "
+                f"updated={prefs.updated_at or 'never'}[/]"
+            )
             continue
         if text.startswith("/"):
             console.print(f"[yellow]unknown command:[/] {text}  (try /help)")

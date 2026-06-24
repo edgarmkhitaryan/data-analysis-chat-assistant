@@ -1,10 +1,11 @@
 """Schema provider node: builds the database context injected into SQL generation.
 
 It combines the *authoritative* column list (read live from BigQuery) with
-hand-written **business annotations** — join keys, what "revenue"/"profit" mean,
-which columns are PII — so the model generates correct, business-aware SQL rather
-than guessing semantics from column names. The result is cached per dataset
-(the schema is effectively static), so we pay the metadata reads once per process.
+hand-written **business annotations** — join keys and what "revenue"/"profit"
+mean — so the model generates correct, business-aware SQL rather than guessing
+semantics from column names. (PII is handled deterministically downstream by the
+masking node, so the model is told nothing about it here.) The result is cached
+per dataset (the schema is static), so we pay the metadata reads once per process.
 """
 
 from assistant.agent.dependencies import AgentDeps
@@ -30,9 +31,8 @@ _TABLE_NOTES = {
         "and department describe the product."
     ),
     "users": (
-        "Customers. Contains PII (email, street_address, postal_code, latitude, "
-        "longitude) — never expose raw PII in answers. Non-sensitive attributes "
-        "useful for analysis: age, gender, city, state, country, traffic_source."
+        "Customers — one row per customer. Useful attributes for analysis include "
+        "age, gender, city, state, country, and traffic_source."
     ),
 }
 

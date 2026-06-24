@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from assistant.bigquery import BigQueryRunner
 from assistant.config import Settings, get_settings
 from assistant.golden import GoldenRetriever
+from assistant.memory import ProfileStore
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class AgentDeps:
 
     runner: BigQueryRunner
     retriever: GoldenRetriever
+    profiles: ProfileStore
     settings: Settings
 
     @classmethod
@@ -27,5 +29,6 @@ class AgentDeps:
         return cls(
             runner=BigQueryRunner.from_settings(settings),
             retriever=GoldenRetriever.from_settings(settings),
+            profiles=ProfileStore(settings.app_db_path),
             settings=settings,
         )

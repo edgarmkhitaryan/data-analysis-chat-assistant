@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # --- Identity & persona ---
     default_persona: str = Field("concise_exec", alias="DEFAULT_PERSONA")
     default_user: str = Field("manager_a", alias="DEFAULT_USER")
+    personas_dir: str = Field("data/personas", alias="PERSONAS_DIR")
+    app_db_path: str = Field("data/app.db", alias="APP_DB_PATH")
 
     # --- PII masking ---
     # ``NoDecode`` stops pydantic-settings from JSON-decoding the env value so our
