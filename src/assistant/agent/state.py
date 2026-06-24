@@ -17,6 +17,17 @@ from assistant.memory.profiles import UserPrefs
 from assistant.persona.loader import Persona
 
 
+class SubResult(TypedDict, total=False):
+    """The outcome of running one sub-question through the analysis pipeline."""
+
+    sub_question: str
+    sub_run_id: str
+    sql: str | None
+    report: str | None
+    row_count: int
+    error: str | None
+
+
 class AgentState(TypedDict, total=False):
     """Typed conversation + analysis state for one thread.
 
@@ -40,6 +51,11 @@ class AgentState(TypedDict, total=False):
     # --- Routing & preferences ---
     intent: Literal["analysis", "update_preference"]
     pref_update: dict | None
+
+    # --- Compound questions (decompose -> run_compound -> synthesize) ---
+    is_compound: bool
+    sub_questions: list[str]
+    sub_results: list["SubResult"]
 
     # --- Persona (org tone) + user preferences (format/verbosity) ---
     persona: Persona

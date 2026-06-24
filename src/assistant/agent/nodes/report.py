@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from assistant.agent.dependencies import AgentDeps
-from assistant.agent.nodes.common import as_text
+from assistant.agent.nodes.common import as_text, compose_system_prompt
 from assistant.agent.state import AgentState
 from assistant.llm import get_chat_model
 
@@ -21,17 +21,6 @@ _BASE_SYSTEM = (
     "reader: monetary values with a currency symbol and two decimals, and large "
     "numbers with thousands separators."
 )
-
-_FORMAT_INSTRUCTIONS = {
-    "table": "Present the core results as a Markdown table.",
-    "bullets": "Present the answer as concise bullet points.",
-    "prose": "Write the answer in short prose paragraphs.",
-}
-
-_VERBOSITY_INSTRUCTIONS = {
-    "concise": "Keep it brief: lead with the headline and only the figures that matter.",
-    "detailed": "Provide thorough detail and useful context around the numbers.",
-}
 
 # Cap how many rows we put in the prompt to keep token cost bounded; the model
 # still receives the true total row count for context.
@@ -56,27 +45,6 @@ def _style_exemplars_block(state: AgentState) -> str:
     return "\n".join(blocks) + "\n\n"
 
 
-def _compose_system_prompt(state: AgentState) -> str:
-    """Build the system prompt: base + org persona (tone) + user format/verbosity."""
-    parts = [_BASE_SYSTEM]
-
-    persona = state.get("persona")
-    if persona is not None:
-        if persona.tone:
-            parts.append(f"Voice and tone: {persona.tone}")
-        if persona.style_rules:
-            parts.append("Style rules:\n- " + "\n- ".join(persona.style_rules))
-        if persona.guardrails:
-            parts.append("Guardrails:\n- " + "\n- ".join(persona.guardrails))
-
-    prefs = state.get("user_prefs")
-    if prefs is not None:
-        parts.append(_FORMAT_INSTRUCTIONS.get(prefs.format, ""))
-        parts.append(_VERBOSITY_INSTRUCTIONS.get(prefs.verbosity, ""))
-
-    return "\n\n".join(part for part in parts if part)
-
-
 def synthesize_report(state: AgentState, deps: AgentDeps) -> dict:
     """Produce the written report and append it to the conversation."""
     chat = get_chat_model(temperature=0.3, settings=deps.settings)
@@ -97,7 +65,7 @@ def synthesize_report(state: AgentState, deps: AgentDeps) -> dict:
         results_section = "Query results: the query returned no rows."
 
     human = f"{_style_exemplars_block(state)}Question: {state['question']}\n\n{results_section}"
-    system = _compose_system_prompt(state)
+    system = compose_system_prompt(state, _BASE_SYSTEM)
     reply = chat.invoke([SystemMessage(content=system), HumanMessage(content=human)])
     report = as_text(reply.content).strip()
     return {"report": report, "messages": [AIMessage(content=report)]}
