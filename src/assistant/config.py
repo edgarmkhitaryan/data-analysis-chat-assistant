@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     default_user: str = Field("manager_a", alias="DEFAULT_USER")
     personas_dir: str = Field("data/personas", alias="PERSONAS_DIR")
     app_db_path: str = Field("data/app.db", alias="APP_DB_PATH")
+    seed_reports_dir: str = Field("data/seed_reports", alias="SEED_REPORTS_DIR")
 
     # --- PII masking ---
     # ``NoDecode`` stops pydantic-settings from JSON-decoding the env value so our

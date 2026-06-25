@@ -11,6 +11,7 @@ from assistant.bigquery import BigQueryRunner
 from assistant.config import Settings, get_settings
 from assistant.golden import GoldenRetriever
 from assistant.memory import ProfileStore
+from assistant.reports import SavedReportStore
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class AgentDeps:
     runner: BigQueryRunner
     retriever: GoldenRetriever
     profiles: ProfileStore
+    reports: SavedReportStore
     settings: Settings
 
     @classmethod
@@ -30,5 +32,6 @@ class AgentDeps:
             runner=BigQueryRunner.from_settings(settings),
             retriever=GoldenRetriever.from_settings(settings),
             profiles=ProfileStore(settings.app_db_path),
+            reports=SavedReportStore(settings.app_db_path, seed_dir=settings.seed_reports_dir),
             settings=settings,
         )

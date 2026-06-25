@@ -1,4 +1,4 @@
-"""Assembles the agent graph.
+r"""Assembles the agent graph.
 
 Main flow (plan/005 §3): contextualize -> guard -> load -> route.
 
@@ -23,6 +23,19 @@ turn ends there, but a combined "set preference + ask analysis" turn continues
 into ``decompose`` with the new preference applied. ``run_compound`` runs each
 sub-question (one for a simple question, several for a compound one) through the
 reusable analysis pipeline below; ``synthesize`` merges the results.
+
+The ``manage_reports`` intent enters the oversight path (plan/007 §4):
+
+    route --(manage_reports)--> parse_report_command --(save)--> save_report -> END
+                                       |        \--(list)--> list_reports -> END
+                                    (delete)
+                                       v
+    resolve_targets --(none)--> respond_none -> END
+        \--(matched)--> confirm_delete  [interrupt() -> CLI confirm] -> END
+
+Only **delete** is destructive: it resolves owner-scoped targets, then pauses on a
+``interrupt()`` and mutates only on an explicit confirm (audited). save/list run
+directly.
 
 Analysis pipeline (a compiled subgraph, invoked once per sub-question):
 
@@ -58,6 +71,14 @@ from assistant.agent.nodes.load_context import load_context
 from assistant.agent.nodes.mask_pii import mask_pii
 from assistant.agent.nodes.reject import respond_reject
 from assistant.agent.nodes.report import synthesize_report
+from assistant.agent.nodes.reports_cmd import (
+    confirm_delete,
+    list_reports,
+    parse_report_command,
+    resolve_targets,
+    respond_none,
+    save_report,
+)
 from assistant.agent.nodes.retrieve import retrieve_golden
 from assistant.agent.nodes.schema import get_schema
 from assistant.agent.nodes.synthesize import synthesize
@@ -88,13 +109,26 @@ def _after_guard(state: AgentState) -> str:
 
 
 def _route_by_intent(state: AgentState) -> str:
-    return "update_preference" if state.get("intent") == "update_preference" else "analysis"
+    intent = state.get("intent")
+    if intent == "update_preference":
+        return "update_preference"
+    if intent == "manage_reports":
+        return "manage_reports"
+    return "analysis"
 
 
 def _after_update_prefs(state: AgentState) -> str:
     # Combined intent: a standing preference that also asked a question continues
     # into the analysis; a preference-only turn ends here.
     return "analysis" if state.get("also_analysis") else "end"
+
+
+def _after_parse_report(state: AgentState) -> str:
+    return state.get("report_action") or "list"
+
+
+def _after_resolve(state: AgentState) -> str:
+    return "confirm" if state.get("pending_action") else "none"
 
 
 def _after_validate(state: AgentState) -> str:
@@ -161,6 +195,12 @@ def build_graph(
     builder.add_node("respond_reject", respond_reject)
     builder.add_node("load_context", lambda state: load_context(state, deps))
     builder.add_node("update_prefs", lambda state: update_prefs(state, deps))
+    builder.add_node("parse_report_command", lambda state: parse_report_command(state, deps))
+    builder.add_node("save_report", lambda state: save_report(state, deps))
+    builder.add_node("list_reports", lambda state: list_reports(state, deps))
+    builder.add_node("resolve_targets", lambda state: resolve_targets(state, deps))
+    builder.add_node("respond_none", respond_none)
+    builder.add_node("confirm_delete", lambda state: confirm_delete(state, deps))
     builder.add_node("decompose", lambda state: decompose(state, deps))
     builder.add_node("run_compound", lambda state: run_compound(state, pipeline))
     builder.add_node("synthesize", lambda state: synthesize(state, deps))
@@ -177,11 +217,30 @@ def build_graph(
     builder.add_conditional_edges(
         "load_context",
         _route_by_intent,
-        {"analysis": "decompose", "update_preference": "update_prefs"},
+        {
+            "analysis": "decompose",
+            "update_preference": "update_prefs",
+            "manage_reports": "parse_report_command",
+        },
     )
     builder.add_conditional_edges(
         "update_prefs", _after_update_prefs, {"analysis": "decompose", "end": END}
     )
+
+    # Report-management (oversight) path.
+    builder.add_conditional_edges(
+        "parse_report_command",
+        _after_parse_report,
+        {"save": "save_report", "list": "list_reports", "delete": "resolve_targets"},
+    )
+    builder.add_edge("save_report", END)
+    builder.add_edge("list_reports", END)
+    builder.add_conditional_edges(
+        "resolve_targets", _after_resolve, {"confirm": "confirm_delete", "none": "respond_none"}
+    )
+    builder.add_edge("respond_none", END)
+    builder.add_edge("confirm_delete", END)
+
     builder.add_edge("decompose", "run_compound")
     builder.add_edge("run_compound", "synthesize")
     builder.add_edge("synthesize", END)

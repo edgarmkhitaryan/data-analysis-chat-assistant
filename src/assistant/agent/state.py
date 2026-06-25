@@ -65,6 +65,13 @@ class AgentState(TypedDict, total=False):
     sub_questions: list[str]
     sub_results: list["SubResult"]
 
+    # --- Report management / oversight (manage_reports path) ---
+    report_action: Literal["save", "list", "delete"] | None
+    report_filters: dict | None
+    # Parsed-but-unexecuted destructive op, carried across the confirm interrupt:
+    # {action, filters, target_ids, summary}.
+    pending_action: dict | None
+
     # --- Persona (org tone) + user preferences (format/verbosity) ---
     persona: Persona
     user_prefs: UserPrefs
