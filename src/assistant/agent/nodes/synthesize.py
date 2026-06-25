@@ -14,8 +14,29 @@ from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text, compose_system_prompt
 from assistant.agent.state import AgentState
 from assistant.llm import get_chat_model
+from assistant.safety.pii import scan_text
 
 logger = logging.getLogger(__name__)
+
+
+def _finalize(report: str, deps: AgentDeps, **extra) -> dict:
+    """Run the output guard over the final report, then commit it to state.
+
+    The PII regex re-scans the user-facing text (the "last line" of plan/007 §3)
+    *before* the report is written to the message history, so the checkpointed
+    conversation can never hold raw PII. A non-zero ``pii_leak_prevented`` means
+    masking upstream missed something — a bug to fix, surfaced via observability.
+    """
+    cleaned, leaks = scan_text(report, deps.settings.pii_mask_style)
+    if leaks:
+        logger.warning("pii_leak_prevented: scrubbed %d PII hit(s) from the final report", leaks)
+    return {
+        "report": cleaned,
+        "messages": [AIMessage(content=cleaned)],
+        "pii_leak_prevented": leaks,
+        **extra,
+    }
+
 
 _MERGE_BASE = (
     "You are a data analyst assistant for a retail company's non-technical executives. "
@@ -37,13 +58,13 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
     if not state.get("is_compound"):
         only = sub_results[0] if sub_results else {}
         report = only.get("report") or "I wasn't able to complete that analysis."
-        return {
-            "report": report,
-            "generated_sql": only.get("sql"),
-            "row_count": only.get("row_count", 0),
-            "last_error": only.get("error"),
-            "messages": [AIMessage(content=report)],
-        }
+        return _finalize(
+            report,
+            deps,
+            generated_sql=only.get("sql"),
+            row_count=only.get("row_count", 0),
+            last_error=only.get("error"),
+        )
 
     # Compound question: merge the parts that succeeded.
     successful = [r for r in sub_results if _succeeded(r)]
@@ -54,7 +75,7 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
             "I wasn't able to answer any part of that question. "
             "Please try rephrasing or narrowing it."
         )
-        return {"report": message, "messages": [AIMessage(content=message)]}
+        return _finalize(message, deps)
 
     parts = "\n\n".join(
         f"### Part {i}: {r['sub_question']}\n{r['report']}"
@@ -78,4 +99,4 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
     report = as_text(
         chat.invoke([SystemMessage(content=system), HumanMessage(content=human)]).content
     ).strip()
-    return {"report": report, "messages": [AIMessage(content=report)], "generated_sql": None}
+    return _finalize(report, deps, generated_sql=None)

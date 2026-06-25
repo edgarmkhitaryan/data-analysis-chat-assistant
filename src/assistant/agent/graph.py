@@ -23,11 +23,14 @@ Analysis pipeline (a compiled subgraph, invoked once per sub-question):
                                               (invalid)      (error)
                                                   v              v
     validate_sql --(valid)--> execute_sql       degrade <--------'
-    execute_sql --(rows)--> synthesize_report -> END
+    execute_sql --(rows)--> mask_pii -> synthesize_report -> END
     degrade -> END
 
+``mask_pii`` (Phase 5) deterministically strips PII from the rows so the report
+LLM only ever sees ``masked_rows``; the output guard in ``synthesize`` re-scans
+the final report text as a last line of defense.
+
 Phase 6 extends ``guard_input`` (injection pre-filter + manage_reports/rejected).
-PII masking (Phase 5) inserts a ``mask_pii`` node on the execute->report edge.
 """
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -44,6 +47,7 @@ from assistant.agent.nodes.execute_sql import execute_sql
 from assistant.agent.nodes.generate_sql import generate_sql
 from assistant.agent.nodes.guard import guard_input
 from assistant.agent.nodes.load_context import load_context
+from assistant.agent.nodes.mask_pii import mask_pii
 from assistant.agent.nodes.report import synthesize_report
 from assistant.agent.nodes.retrieve import retrieve_golden
 from assistant.agent.nodes.schema import get_schema
@@ -79,7 +83,7 @@ def _after_validate(state: AgentState) -> str:
 
 
 def _after_execute(state: AgentState) -> str:
-    return "degrade" if state.get("last_error") else "report"
+    return "degrade" if state.get("last_error") else "mask"
 
 
 def build_analysis_pipeline(deps: AgentDeps):
@@ -94,6 +98,7 @@ def build_analysis_pipeline(deps: AgentDeps):
     builder.add_node("generate_sql", lambda state: generate_sql(state, deps))
     builder.add_node("validate_sql", validate_sql)
     builder.add_node("execute_sql", lambda state: execute_sql(state, deps))
+    builder.add_node("mask_pii", lambda state: mask_pii(state, deps))
     builder.add_node("synthesize_report", lambda state: synthesize_report(state, deps))
     builder.add_node("degrade", degrade)
 
@@ -105,8 +110,9 @@ def build_analysis_pipeline(deps: AgentDeps):
         "validate_sql", _after_validate, {"execute": "execute_sql", "degrade": "degrade"}
     )
     builder.add_conditional_edges(
-        "execute_sql", _after_execute, {"report": "synthesize_report", "degrade": "degrade"}
+        "execute_sql", _after_execute, {"mask": "mask_pii", "degrade": "degrade"}
     )
+    builder.add_edge("mask_pii", "synthesize_report")
     builder.add_edge("synthesize_report", END)
     builder.add_edge("degrade", END)
     return builder.compile()

@@ -71,7 +71,12 @@ class AgentState(TypedDict, total=False):
     sql_attempts: int
     last_error: str | None
     raw_rows: list[dict]
+    masked_rows: list[dict]
     row_count: int
+
+    # --- Safety: PII masking (deterministic) ---
+    pii_masked_count: int
+    pii_leak_prevented: int
 
     # --- Output ---
     report: str

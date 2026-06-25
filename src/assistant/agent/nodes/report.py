@@ -49,7 +49,9 @@ def synthesize_report(state: AgentState, deps: AgentDeps) -> dict:
     """Produce the written report and append it to the conversation."""
     chat = get_chat_model(temperature=0.3, settings=deps.settings)
 
-    rows = state.get("raw_rows", [])
+    # Read masked_rows only: the upstream mask_pii node guarantees no raw PII ever
+    # reaches this prompt (plan/007 §3). Defaulting to [] fails safe (never to raw).
+    rows = state.get("masked_rows", [])
     shown = rows[:_MAX_ROWS_IN_PROMPT]
     row_count = state.get("row_count", len(rows))
 
