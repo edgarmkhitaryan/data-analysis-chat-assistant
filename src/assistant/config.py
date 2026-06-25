@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # --- BigQuery ---
     bq_dataset: str = Field("bigquery-public-data.thelook_ecommerce", alias="BQ_DATASET")
     max_bytes_billed: int = Field(2_000_000_000, alias="MAX_BYTES_BILLED")
+    sql_max_limit: int = Field(1000, alias="SQL_MAX_LIMIT")
 
     # --- Models ---
     llm_model: str = Field("gemini-3.1-flash-lite", alias="LLM_MODEL")

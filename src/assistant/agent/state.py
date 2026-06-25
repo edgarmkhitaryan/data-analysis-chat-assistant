@@ -49,8 +49,16 @@ class AgentState(TypedDict, total=False):
     clarifying_question: str | None
 
     # --- Routing & preferences ---
-    intent: Literal["analysis", "update_preference"]
+    intent: Literal["analysis", "manage_reports", "update_preference", "rejected"]
+    rejection_reason: str | None
     pref_update: dict | None
+    # Combined intent (Phase 6): a standing preference *and* an analysis question in
+    # one message persists the pref AND continues into the analysis.
+    also_analysis: bool
+    # A one-off format ("...as bullets just this once") applied to this turn only.
+    oneoff_format: Literal["table", "bullets", "prose"] | None
+    # Acknowledgement prepended to a combined turn's report ("Saved your preference…").
+    pref_saved_note: str | None
 
     # --- Compound questions (decompose -> run_compound -> synthesize) ---
     is_compound: bool

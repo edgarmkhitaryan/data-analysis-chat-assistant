@@ -19,17 +19,22 @@ from assistant.safety.pii import scan_text
 logger = logging.getLogger(__name__)
 
 
-def _finalize(report: str, deps: AgentDeps, **extra) -> dict:
+def _finalize(report: str, deps: AgentDeps, prefix: str | None = None, **extra) -> dict:
     """Run the output guard over the final report, then commit it to state.
 
     The PII regex re-scans the user-facing text (the "last line" of plan/007 §3)
     *before* the report is written to the message history, so the checkpointed
     conversation can never hold raw PII. A non-zero ``pii_leak_prevented`` means
     masking upstream missed something — a bug to fix, surfaced via observability.
+
+    ``prefix`` (a combined-intent preference ack) is prepended after guarding so the
+    user sees their preference was saved alongside the analysis they asked for.
     """
     cleaned, leaks = scan_text(report, deps.settings.pii_mask_style)
     if leaks:
         logger.warning("pii_leak_prevented: scrubbed %d PII hit(s) from the final report", leaks)
+    if prefix:
+        cleaned = f"{prefix}\n\n{cleaned}"
     return {
         "report": cleaned,
         "messages": [AIMessage(content=cleaned)],
@@ -53,6 +58,8 @@ def _succeeded(result: dict) -> bool:
 def synthesize(state: AgentState, deps: AgentDeps) -> dict:
     """Pass a single report through, or merge multiple sub-reports into one briefing."""
     sub_results = state.get("sub_results", [])
+    # Combined-intent ack (set by update_prefs), prepended to the analysis report.
+    saved_note = state.get("pref_saved_note")
 
     # Single question: surface the one report unchanged.
     if not state.get("is_compound"):
@@ -61,6 +68,7 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
         return _finalize(
             report,
             deps,
+            prefix=saved_note,
             generated_sql=only.get("sql"),
             row_count=only.get("row_count", 0),
             last_error=only.get("error"),
@@ -75,7 +83,7 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
             "I wasn't able to answer any part of that question. "
             "Please try rephrasing or narrowing it."
         )
-        return _finalize(message, deps)
+        return _finalize(message, deps, prefix=saved_note)
 
     parts = "\n\n".join(
         f"### Part {i}: {r['sub_question']}\n{r['report']}"
@@ -99,4 +107,4 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
     report = as_text(
         chat.invoke([SystemMessage(content=system), HumanMessage(content=human)]).content
     ).strip()
-    return _finalize(report, deps, generated_sql=None)
+    return _finalize(report, deps, prefix=saved_note, generated_sql=None)

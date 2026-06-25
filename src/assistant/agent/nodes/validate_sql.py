@@ -1,42 +1,24 @@
-"""Basic SQL validation node (Phase 2).
+"""SQL validation node (plan/007 §2).
 
-A lightweight read-only gate: it confirms the statement is a single SELECT/CTE
-and rejects obvious DML/DDL. Phase 6 replaces this with a robust ``sqlglot``
-AST-based validator (table allow-list, LIMIT injection, no regex fragility); the
-graph wiring stays the same, only this node's body gets stronger.
+Thin wrapper over the pure :func:`assistant.safety.sql_validator.validate_select`
+(sqlglot AST: single statement, read-only, table allow-list, LIMIT injection/clamp).
+On success it stores the *normalized* SQL (with the enforced LIMIT); on failure it
+sets ``last_error`` so the graph degrades (and, from Phase 8, self-corrects). The
+dry-run cost guard runs later, at the execution boundary.
 """
 
-import re
-
+from assistant.agent.dependencies import AgentDeps
 from assistant.agent.state import AgentState
-
-_FORBIDDEN_KEYWORDS = (
-    "insert",
-    "update",
-    "delete",
-    "drop",
-    "alter",
-    "create",
-    "merge",
-    "truncate",
-    "grant",
-    "replace",
-)
+from assistant.safety.sql_validator import validate_select
 
 
-def validate_sql(state: AgentState) -> dict:
-    """Validate the generated SQL; set ``last_error`` if it is not safe to run."""
-    sql = (state.get("generated_sql") or "").strip().rstrip(";").strip()
-    if not sql:
-        return {"last_error": "No SQL was generated."}
-
-    lowered = sql.lower()
-    if not (lowered.startswith("select") or lowered.startswith("with")):
-        return {"last_error": "Only SELECT queries are allowed."}
-    if ";" in sql:
-        return {"last_error": "Only a single statement is allowed."}
-    for keyword in _FORBIDDEN_KEYWORDS:
-        if re.search(rf"\b{keyword}\b", lowered):
-            return {"last_error": f"Disallowed keyword in query: {keyword.upper()}."}
-
-    return {"generated_sql": sql, "last_error": None}
+def validate_sql(state: AgentState, deps: AgentDeps) -> dict:
+    """Validate + normalize the generated SQL; set ``last_error`` if unsafe."""
+    result = validate_select(
+        state.get("generated_sql") or "",
+        dataset=deps.settings.bq_dataset,
+        max_limit=deps.settings.sql_max_limit,
+    )
+    if not result.ok:
+        return {"last_error": result.error}
+    return {"generated_sql": result.sql, "last_error": None}

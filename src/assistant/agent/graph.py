@@ -6,15 +6,23 @@ Main flow (plan/005 §3): contextualize -> guard -> load -> route.
                   |
               (resolved / first turn)
                   v
-    guard_input -> load_context -> route --(update_preference)--> update_prefs -> END
-                                     |
-                                 (analysis)
-                                     v
+    guard_input --(rejected)--> respond_reject -> END
+                  |
+                (ok)
+                  v
+    load_context -> route --(update_preference)--> update_prefs --(preference only)--> END
+                      |                                  |
+                  (analysis)                     (also asks a question)
+                      v                                  |
+                  decompose <----------------------------'
                   decompose -> run_compound -> synthesize -> END
 
-``run_compound`` runs each sub-question (one for a simple question, several for a
-compound one) through the reusable analysis pipeline below; ``synthesize`` then
-merges the results (a single question passes straight through).
+The guard refuses off-topic/injection turns (``respond_reject``). A standing
+preference is persisted by ``update_prefs`` as a side-effect: a preference-only
+turn ends there, but a combined "set preference + ask analysis" turn continues
+into ``decompose`` with the new preference applied. ``run_compound`` runs each
+sub-question (one for a simple question, several for a compound one) through the
+reusable analysis pipeline below; ``synthesize`` merges the results.
 
 Analysis pipeline (a compiled subgraph, invoked once per sub-question):
 
@@ -48,6 +56,7 @@ from assistant.agent.nodes.generate_sql import generate_sql
 from assistant.agent.nodes.guard import guard_input
 from assistant.agent.nodes.load_context import load_context
 from assistant.agent.nodes.mask_pii import mask_pii
+from assistant.agent.nodes.reject import respond_reject
 from assistant.agent.nodes.report import synthesize_report
 from assistant.agent.nodes.retrieve import retrieve_golden
 from assistant.agent.nodes.schema import get_schema
@@ -74,8 +83,18 @@ def _after_contextualize(state: AgentState) -> str:
     return "clarify" if state.get("needs_clarification") else "guard"
 
 
+def _after_guard(state: AgentState) -> str:
+    return "reject" if state.get("intent") == "rejected" else "ok"
+
+
 def _route_by_intent(state: AgentState) -> str:
     return "update_preference" if state.get("intent") == "update_preference" else "analysis"
+
+
+def _after_update_prefs(state: AgentState) -> str:
+    # Combined intent: a standing preference that also asked a question continues
+    # into the analysis; a preference-only turn ends here.
+    return "analysis" if state.get("also_analysis") else "end"
 
 
 def _after_validate(state: AgentState) -> str:
@@ -96,7 +115,7 @@ def build_analysis_pipeline(deps: AgentDeps):
     builder.add_node("retrieve_golden", lambda state: retrieve_golden(state, deps))
     builder.add_node("get_schema", lambda state: get_schema(state, deps))
     builder.add_node("generate_sql", lambda state: generate_sql(state, deps))
-    builder.add_node("validate_sql", validate_sql)
+    builder.add_node("validate_sql", lambda state: validate_sql(state, deps))
     builder.add_node("execute_sql", lambda state: execute_sql(state, deps))
     builder.add_node("mask_pii", lambda state: mask_pii(state, deps))
     builder.add_node("synthesize_report", lambda state: synthesize_report(state, deps))
@@ -139,6 +158,7 @@ def build_graph(
     builder.add_node("contextualize", lambda state: contextualize(state, deps))
     builder.add_node("clarify", clarify)
     builder.add_node("guard_input", lambda state: guard_input(state, deps))
+    builder.add_node("respond_reject", respond_reject)
     builder.add_node("load_context", lambda state: load_context(state, deps))
     builder.add_node("update_prefs", lambda state: update_prefs(state, deps))
     builder.add_node("decompose", lambda state: decompose(state, deps))
@@ -150,13 +170,18 @@ def build_graph(
         "contextualize", _after_contextualize, {"clarify": "clarify", "guard": "guard_input"}
     )
     builder.add_edge("clarify", END)
-    builder.add_edge("guard_input", "load_context")
+    builder.add_conditional_edges(
+        "guard_input", _after_guard, {"reject": "respond_reject", "ok": "load_context"}
+    )
+    builder.add_edge("respond_reject", END)
     builder.add_conditional_edges(
         "load_context",
         _route_by_intent,
         {"analysis": "decompose", "update_preference": "update_prefs"},
     )
-    builder.add_edge("update_prefs", END)
+    builder.add_conditional_edges(
+        "update_prefs", _after_update_prefs, {"analysis": "decompose", "end": END}
+    )
     builder.add_edge("decompose", "run_compound")
     builder.add_edge("run_compound", "synthesize")
     builder.add_edge("synthesize", END)

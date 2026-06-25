@@ -2,6 +2,9 @@
 plan/
 task.md
 
+# Local-only Claude Code tooling (custom subagents, settings)
+.claude/
+
 # Secrets — never commit the real environment file
 .env
 
