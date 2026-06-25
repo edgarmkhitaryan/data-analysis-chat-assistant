@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     max_sub_questions: int = Field(4, alias="MAX_SUB_QUESTIONS")
     max_history_messages: int = Field(10, alias="MAX_HISTORY_MESSAGES")
 
+    # --- Resilience (retries + circuit breaker for LLM/BigQuery) ---
+    llm_max_retries: int = Field(4, alias="LLM_MAX_RETRIES")
+    llm_retry_base_delay: float = Field(1.0, alias="LLM_RETRY_BASE_DELAY")
+    circuit_breaker_threshold: int = Field(5, alias="CIRCUIT_BREAKER_THRESHOLD")
+    circuit_breaker_cooldown_seconds: float = Field(30.0, alias="CIRCUIT_BREAKER_COOLDOWN_SECONDS")
+
     # --- Golden Bucket (Hybrid Intelligence) ---
     golden_top_k: int = Field(3, alias="GOLDEN_TOP_K")
     golden_sim_floor: float = Field(0.68, alias="GOLDEN_SIM_FLOOR")

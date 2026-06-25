@@ -25,6 +25,7 @@ import pandas as pd
 from google.cloud import bigquery
 
 from assistant.config import Settings, get_settings
+from assistant.resilience import CircuitBreaker, resilient_call
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,19 @@ class BigQueryRunner:
         dataset_id: str = "bigquery-public-data.thelook_ecommerce",
         max_bytes_billed: int = 2_000_000_000,
         client: bigquery.Client | None = None,
+        *,
+        max_retries: int = 4,
+        retry_base_delay: float = 1.0,
+        breaker_threshold: int = 5,
+        breaker_cooldown_s: float = 30.0,
     ) -> None:
         self.dataset_id = dataset_id
         self.max_bytes_billed = max_bytes_billed
+        self._max_retries = max_retries
+        self._retry_base_delay = retry_base_delay
+        self._breaker = CircuitBreaker(
+            "bigquery", threshold=breaker_threshold, cooldown_s=breaker_cooldown_s
+        )
         if client is not None:
             self.client = client  # injected (tests)
         else:
@@ -124,16 +135,37 @@ class BigQueryRunner:
             project_id=settings.google_cloud_project,
             dataset_id=settings.bq_dataset,
             max_bytes_billed=settings.max_bytes_billed,
+            max_retries=settings.llm_max_retries,
+            retry_base_delay=settings.llm_retry_base_delay,
+            breaker_threshold=settings.circuit_breaker_threshold,
+            breaker_cooldown_s=settings.circuit_breaker_cooldown_seconds,
+        )
+
+    def _resilient(self, func):
+        """Run a BigQuery network call with retry-on-transient + the shared breaker."""
+        return resilient_call(
+            func,
+            breaker=self._breaker,
+            max_attempts=self._max_retries,
+            base_delay=self._retry_base_delay,
         )
 
     def dry_run(self, sql: str) -> QueryEstimate:
         """Estimate a query's scan size without running it (validates refs + syntax)."""
-        job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
-        job = self.client.query(sql, job_config=job_config)
-        return QueryEstimate(bytes_processed=int(job.total_bytes_processed or 0))
+
+        def _job() -> QueryEstimate:
+            job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+            job = self.client.query(sql, job_config=job_config)
+            return QueryEstimate(bytes_processed=int(job.total_bytes_processed or 0))
+
+        return self._resilient(_job)
 
     def execute_query(self, sql: str, *, max_bytes_billed: int | None = None) -> QueryResult:
         """Dry-run for cost, refuse if over budget, then execute under a hard cap.
+
+        Transient failures (timeouts, 5xx, rate limits) are retried with backoff and
+        tracked by a circuit breaker; permanent errors (e.g. SQL syntax) fail fast so
+        the graph's self-correction loop can repair them.
 
         Raises:
             QueryCostError: if the estimated scan exceeds the byte ceiling.
@@ -147,10 +179,14 @@ class BigQueryRunner:
 
         job_config = bigquery.QueryJobConfig(maximum_bytes_billed=limit)
         start = time.perf_counter()
-        job = self.client.query(sql, job_config=job_config)
-        # Analytic report result sets are small, so the REST path is plenty fast;
-        # opting out of the BigQuery Storage API keeps our dependency footprint lean.
-        dataframe = job.result().to_dataframe(create_bqstorage_client=False)
+
+        def _run() -> tuple[bigquery.QueryJob, pd.DataFrame]:
+            job = self.client.query(sql, job_config=job_config)
+            # Analytic report result sets are small, so the REST path is plenty fast;
+            # opting out of the BigQuery Storage API keeps our dependency footprint lean.
+            return job, job.result().to_dataframe(create_bqstorage_client=False)
+
+        job, dataframe = self._resilient(_run)
         duration_ms = (time.perf_counter() - start) * 1000.0
 
         result = QueryResult(

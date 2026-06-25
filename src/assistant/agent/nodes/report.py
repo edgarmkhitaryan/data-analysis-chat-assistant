@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text, compose_system_prompt
 from assistant.agent.state import AgentState
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 
 _BASE_SYSTEM = (
     "You are a data analyst assistant for a retail company's non-technical "
@@ -68,6 +68,8 @@ def synthesize_report(state: AgentState, deps: AgentDeps) -> dict:
 
     human = f"{_style_exemplars_block(state)}Question: {state['question']}\n\n{results_section}"
     system = compose_system_prompt(state, _BASE_SYSTEM)
-    reply = chat.invoke([SystemMessage(content=system), HumanMessage(content=human)])
+    reply = resilient_invoke(
+        chat, [SystemMessage(content=system), HumanMessage(content=human)], settings=deps.settings
+    )
     report = as_text(reply.content).strip()
     return {"report": report, "messages": [AIMessage(content=report)]}

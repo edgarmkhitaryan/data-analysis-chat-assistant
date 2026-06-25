@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.state import AgentState, SubResult
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,10 @@ def decompose(state: AgentState, deps: AgentDeps) -> dict:
     question = state["question"]
     chat = get_chat_model(temperature=0.0, settings=deps.settings)
     try:
-        result: Decomposition = chat.with_structured_output(Decomposition).invoke(
-            [SystemMessage(content=_SYSTEM), HumanMessage(content=question)]
+        result: Decomposition = resilient_invoke(
+            chat.with_structured_output(Decomposition),
+            [SystemMessage(content=_SYSTEM), HumanMessage(content=question)],
+            settings=deps.settings,
         )
     except Exception as exc:  # noqa: BLE001 — fall back to a single question on failure
         logger.warning("Decompose failed (%s); treating as a single question", exc)

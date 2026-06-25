@@ -1,8 +1,9 @@
 """SQL generation node: turns the question + schema context into a SELECT query.
 
-If a previous attempt left an error on the state, it is fed back to the model so
-the regenerated query can fix it. The bounded self-correction *loop* that drives
-this is added in Phase 8; here the node simply produces (or re-produces) SQL.
+If a previous attempt left an error (or a "0 rows" hint from ``self_correct``) on
+the state, it is fed back to the model so the regenerated query can fix it. The
+bounded loop that drives the retries lives in the graph (plan/008 §1); this node
+just produces (or re-produces) SQL and increments ``sql_attempts``.
 """
 
 import re
@@ -12,7 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text
 from assistant.agent.state import AgentState
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 
 _SYSTEM_PROMPT = (
     "You are an expert analytics engineer who writes BigQuery Standard SQL for a "
@@ -65,12 +66,12 @@ def generate_sql(state: AgentState, deps: AgentDeps) -> dict:
         messages.append(
             HumanMessage(
                 content=(
-                    f"The previous query failed with: {state['last_error']}\n"
-                    "Return only the corrected SQL."
+                    f"The previous attempt did not succeed: {state['last_error']}\n"
+                    "Revise the query to address this and return only the corrected SQL."
                 )
             )
         )
-    reply = chat.invoke(messages)
+    reply = resilient_invoke(chat, messages, settings=deps.settings)
     return {
         "generated_sql": _extract_sql(reply.content),
         "sql_attempts": state.get("sql_attempts", 0) + 1,

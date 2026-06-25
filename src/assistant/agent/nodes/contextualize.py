@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text
 from assistant.agent.state import AgentState
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,10 @@ def contextualize(state: AgentState, deps: AgentDeps) -> dict:
         f"Latest user message: {raw_question}"
     )
     try:
-        result: Contextualization = chat.with_structured_output(Contextualization).invoke(
-            [SystemMessage(content=system), HumanMessage(content=human)]
+        result: Contextualization = resilient_invoke(
+            chat.with_structured_output(Contextualization),
+            [SystemMessage(content=system), HumanMessage(content=human)],
+            settings=deps.settings,
         )
     except Exception as exc:  # noqa: BLE001 — never break the turn on a rewrite failure
         logger.warning("Contextualize failed (%s); passing the question through", exc)

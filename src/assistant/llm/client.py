@@ -4,16 +4,25 @@ Centralizing model construction here means model choice, credentials, and retry
 policy are configured in exactly one place. Nodes ask for ``get_chat_model()``
 (fast default) or ``get_chat_model(heavy=True)`` (the escalation model for hard
 reasoning) and never touch credentials or provider details.
+
+LLM calls go through :func:`resilient_invoke`, which adds tenacity backoff + a
+shared circuit breaker (plan/008 §3). The model's own built-in retry is therefore
+disabled (``max_retries=0``) so we have a single, observable retry layer rather
+than two multiplying each other.
 """
 
+from typing import Any
+
+from langchain_core.runnables import Runnable
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from assistant.config import Settings, get_settings
+from assistant.resilience import CircuitBreaker, resilient_call
 
-# Conservative built-in handling of transient API errors (rate limits, 5xx).
-# Phase 8 layers tenacity backoff + a circuit breaker on top of this baseline.
 _REQUEST_TIMEOUT_S = 60.0
-_MAX_RETRIES = 3
+
+# One process-wide breaker for the Gemini dependency (built lazily from settings).
+_llm_breaker: CircuitBreaker | None = None
 
 
 def get_chat_model(
@@ -38,5 +47,32 @@ def get_chat_model(
         google_api_key=settings.gemini_api_key.get_secret_value(),
         temperature=temperature,
         timeout=_REQUEST_TIMEOUT_S,
-        max_retries=_MAX_RETRIES,
+        max_retries=0,  # tenacity owns retries (see resilient_invoke)
+    )
+
+
+def _breaker(settings: Settings) -> CircuitBreaker:
+    global _llm_breaker
+    if _llm_breaker is None:
+        _llm_breaker = CircuitBreaker(
+            "gemini",
+            threshold=settings.circuit_breaker_threshold,
+            cooldown_s=settings.circuit_breaker_cooldown_seconds,
+        )
+    return _llm_breaker
+
+
+def resilient_invoke(runnable: Runnable, messages: Any, *, settings: Settings | None = None) -> Any:
+    """Invoke a chat runnable with retry-on-transient + circuit breaker (plan/008 §3).
+
+    Works for a plain chat model *and* a ``with_structured_output`` runnable — it
+    just wraps ``.invoke``. Permanent errors (auth/4xx) fail fast; an open breaker
+    fails fast so callers can degrade gracefully.
+    """
+    settings = settings or get_settings()
+    return resilient_call(
+        lambda: runnable.invoke(messages),
+        breaker=_breaker(settings),
+        max_attempts=settings.llm_max_retries,
+        base_delay=settings.llm_retry_base_delay,
     )

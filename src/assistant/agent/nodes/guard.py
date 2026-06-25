@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.state import AgentState
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 from assistant.safety.input_guard import injection_check
 
 logger = logging.getLogger(__name__)
@@ -107,8 +107,10 @@ def guard_input(state: AgentState, deps: AgentDeps) -> dict:
     # 2) LLM classification for everything else.
     chat = get_chat_model(temperature=0.0, settings=deps.settings)
     try:
-        decision: IntentDecision = chat.with_structured_output(IntentDecision).invoke(
-            [SystemMessage(content=_GUARD_SYSTEM), HumanMessage(content=question)]
+        decision: IntentDecision = resilient_invoke(
+            chat.with_structured_output(IntentDecision),
+            [SystemMessage(content=_GUARD_SYSTEM), HumanMessage(content=question)],
+            settings=deps.settings,
         )
     except Exception as exc:  # noqa: BLE001 — never let the guard break a turn
         logger.warning("Guard classification failed (%s); defaulting to analysis", exc)

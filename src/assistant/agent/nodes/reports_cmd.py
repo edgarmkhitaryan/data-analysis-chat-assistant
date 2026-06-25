@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text
 from assistant.agent.state import AgentState
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,10 @@ def parse_report_command(state: AgentState, deps: AgentDeps) -> dict:
     question = state.get("question", "")
     chat = get_chat_model(temperature=0.0, settings=deps.settings)
     try:
-        cmd: ReportCommand = chat.with_structured_output(ReportCommand).invoke(
-            [SystemMessage(content=_PARSE_SYSTEM), HumanMessage(content=question)]
+        cmd: ReportCommand = resilient_invoke(
+            chat.with_structured_output(ReportCommand),
+            [SystemMessage(content=_PARSE_SYSTEM), HumanMessage(content=question)],
+            settings=deps.settings,
         )
     except Exception as exc:  # noqa: BLE001 — default to the safe, non-destructive action
         logger.warning("Report-command parse failed (%s); defaulting to list", exc)

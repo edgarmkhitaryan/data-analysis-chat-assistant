@@ -39,13 +39,17 @@ directly.
 
 Analysis pipeline (a compiled subgraph, invoked once per sub-question):
 
-    START -> retrieve_golden -> get_schema -> generate_sql -> validate_sql
-                                                  |              |
-                                              (invalid)      (error)
-                                                  v              v
-    validate_sql --(valid)--> execute_sql       degrade <--------'
-    execute_sql --(rows)--> mask_pii -> synthesize_report -> END
-    degrade -> END
+    START -> retrieve_golden -> get_schema -> generate_sql -> validate_sql -> execute_sql
+                                                  ^                                 |
+                                                  |  (bounded self-correction)      |
+                                          self_correct <--(invalid | error | empty;-+
+                                                  |          attempts < MAX)
+    validate_sql/execute_sql --(attempts exhausted)--> degrade -> END
+    execute_sql --(rows | accepted empty)--> mask_pii -> synthesize_report -> END
+
+The self-correction loop (plan/008 §1) feeds the specific validator/BigQuery error
+(or a one-time "0 rows" hint) back to ``generate_sql``, bounded by MAX_SQL_ATTEMPTS;
+when the budget is exhausted it degrades gracefully instead of crashing.
 
 ``mask_pii`` (Phase 5) deterministically strips PII from the rows so the report
 LLM only ever sees ``masked_rows``; the output guard in ``synthesize`` re-scans
@@ -81,6 +85,7 @@ from assistant.agent.nodes.reports_cmd import (
 )
 from assistant.agent.nodes.retrieve import retrieve_golden
 from assistant.agent.nodes.schema import get_schema
+from assistant.agent.nodes.self_correct import self_correct
 from assistant.agent.nodes.synthesize import synthesize
 from assistant.agent.nodes.update_prefs import update_prefs
 from assistant.agent.nodes.validate_sql import validate_sql
@@ -131,12 +136,24 @@ def _after_resolve(state: AgentState) -> str:
     return "confirm" if state.get("pending_action") else "none"
 
 
-def _after_validate(state: AgentState) -> str:
-    return "degrade" if state.get("last_error") else "execute"
+def _route_after_validate(state: AgentState, max_attempts: int) -> str:
+    """Valid SQL -> execute; invalid -> self-correct while attempts remain, else degrade."""
+    if state.get("last_error"):
+        return "retry" if state.get("sql_attempts", 0) < max_attempts else "degrade"
+    return "execute"
 
 
-def _after_execute(state: AgentState) -> str:
-    return "degrade" if state.get("last_error") else "mask"
+def _route_after_execute(state: AgentState, max_attempts: int) -> str:
+    """Rows -> mask; error -> self-correct/degrade; empty -> one guided retry, then report."""
+    if state.get("last_error"):
+        return "retry" if state.get("sql_attempts", 0) < max_attempts else "degrade"
+    if (
+        state.get("row_count", 0) == 0
+        and not state.get("empty_retried")
+        and state.get("sql_attempts", 0) < max_attempts
+    ):
+        return "retry"
+    return "mask"
 
 
 def build_analysis_pipeline(deps: AgentDeps):
@@ -145,12 +162,15 @@ def build_analysis_pipeline(deps: AgentDeps):
     Reused by ``run_compound`` once per sub-question. Compiled without a
     checkpointer: each invocation is a transient, isolated sub-run within a turn.
     """
+    max_attempts = deps.settings.max_sql_attempts
+
     builder = StateGraph(AgentState)
     builder.add_node("retrieve_golden", lambda state: retrieve_golden(state, deps))
     builder.add_node("get_schema", lambda state: get_schema(state, deps))
     builder.add_node("generate_sql", lambda state: generate_sql(state, deps))
     builder.add_node("validate_sql", lambda state: validate_sql(state, deps))
     builder.add_node("execute_sql", lambda state: execute_sql(state, deps))
+    builder.add_node("self_correct", self_correct)
     builder.add_node("mask_pii", lambda state: mask_pii(state, deps))
     builder.add_node("synthesize_report", lambda state: synthesize_report(state, deps))
     builder.add_node("degrade", degrade)
@@ -160,11 +180,16 @@ def build_analysis_pipeline(deps: AgentDeps):
     builder.add_edge("get_schema", "generate_sql")
     builder.add_edge("generate_sql", "validate_sql")
     builder.add_conditional_edges(
-        "validate_sql", _after_validate, {"execute": "execute_sql", "degrade": "degrade"}
+        "validate_sql",
+        lambda state: _route_after_validate(state, max_attempts),
+        {"execute": "execute_sql", "retry": "self_correct", "degrade": "degrade"},
     )
     builder.add_conditional_edges(
-        "execute_sql", _after_execute, {"mask": "mask_pii", "degrade": "degrade"}
+        "execute_sql",
+        lambda state: _route_after_execute(state, max_attempts),
+        {"mask": "mask_pii", "retry": "self_correct", "degrade": "degrade"},
     )
+    builder.add_edge("self_correct", "generate_sql")  # the bounded self-correction loop
     builder.add_edge("mask_pii", "synthesize_report")
     builder.add_edge("synthesize_report", END)
     builder.add_edge("degrade", END)

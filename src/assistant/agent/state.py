@@ -85,6 +85,7 @@ class AgentState(TypedDict, total=False):
     generated_sql: str
     sql_attempts: int
     last_error: str | None
+    empty_retried: bool  # whether the one guided "0 rows" reformulation has been used
     raw_rows: list[dict]
     masked_rows: list[dict]
     row_count: int

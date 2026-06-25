@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text, compose_system_prompt
 from assistant.agent.state import AgentState
-from assistant.llm import get_chat_model
+from assistant.llm import get_chat_model, resilient_invoke
 from assistant.safety.pii import scan_text
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,8 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
         f"Findings for each part:\n\n{parts}{note}"
     )
     chat = get_chat_model(temperature=0.3, settings=deps.settings)
-    report = as_text(
-        chat.invoke([SystemMessage(content=system), HumanMessage(content=human)]).content
-    ).strip()
+    reply = resilient_invoke(
+        chat, [SystemMessage(content=system), HumanMessage(content=human)], settings=deps.settings
+    )
+    report = as_text(reply.content).strip()
     return _finalize(report, deps, prefix=saved_note, generated_sql=None)
