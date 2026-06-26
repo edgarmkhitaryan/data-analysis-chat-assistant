@@ -17,7 +17,14 @@ from rich.panel import Panel
 
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.graph import build_graph
-from assistant.config import get_settings
+from assistant.config import Settings, get_settings
+from assistant.observability import (
+    SESSION_METRICS,
+    configure_logging,
+    enable_langsmith,
+    start_run,
+)
+from assistant.observability.tracing import Tracer
 
 _HELP = """\
 Commands:
@@ -25,14 +32,48 @@ Commands:
   /prefs       show the current user's saved preferences
   /reports     list your saved reports
   /save        save the last report to your library
+  /trace       show the trace (step timeline) of the last turn
+  /metrics     show session metrics (success, self-correction, PII, cost)
   /whoami      show the current user and thread
   /new         start a new conversation thread
   /help        show this help
   /exit        quit"""
 
+# The most recent turn's trace, surfaced by /trace.
+_last_tracer: Tracer | None = None
+
 
 def _new_thread_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def _finalize_trace(tracer: Tracer, result: dict, settings: Settings) -> None:
+    """Record the turn's header + outcome, persist the trace, and update metrics."""
+    tracer.set_header(
+        question=result.get("question"),
+        history_used=result.get("history_used"),
+        intent=result.get("intent"),
+        is_compound=result.get("is_compound"),
+    )
+    if result.get("needs_clarification"):
+        status = "clarification"
+    elif result.get("intent") == "rejected":
+        status = "rejected"
+    elif result.get("intent") == "update_preference":
+        status = "preference"
+    elif result.get("intent") == "manage_reports":
+        status = "reports"
+    elif result.get("last_error"):
+        status = "degraded"
+    else:
+        status = "success"
+    tracer.finalize(
+        status=status,
+        rows=result.get("row_count"),
+        pii_leak_prevented=result.get("pii_leak_prevented"),
+    )
+    tracer.save(settings.traces_dir)
+    SESSION_METRICS.record(tracer)
 
 
 def _render(console: Console, result: dict, source: str) -> None:
@@ -70,15 +111,20 @@ def _show_interrupt(console: Console, result: dict) -> bool:
     return True
 
 
-def _run_turn(graph, console: Console, question: str, user_id: str, thread_id: str) -> bool:
+def _run_turn(
+    graph, console: Console, question: str, user_id: str, thread_id: str, settings: Settings
+) -> bool:
     """Run one turn; return True if it paused awaiting a confirm/cancel reply."""
+    global _last_tracer
+    run_id = _new_thread_id()
+    _last_tracer = start_run(run_id, user_id, thread_id, question)
     initial = {
         "messages": [HumanMessage(content=question)],
         "raw_question": question,
         "question": question,
         "user_id": user_id,
         "thread_id": thread_id,
-        "run_id": _new_thread_id(),
+        "run_id": run_id,
         "sql_attempts": 0,
         "last_error": None,
     }
@@ -86,18 +132,26 @@ def _run_turn(graph, console: Console, question: str, user_id: str, thread_id: s
     with console.status("[dim]thinking…[/]", spinner="dots"):
         result = graph.invoke(initial, config=config)
     if _show_interrupt(console, result):
+        _last_tracer.finalize(status="awaiting_confirmation")
+        _last_tracer.save(settings.traces_dir)
         return True
+    _finalize_trace(_last_tracer, result, settings)
     _render(console, result, question)
+    console.print(f"[dim]run_id={run_id} · /trace for the step timeline[/]")
     return False
 
 
-def _resume_turn(graph, console: Console, reply: str, thread_id: str) -> bool:
+def _resume_turn(graph, console: Console, reply: str, thread_id: str, settings: Settings) -> bool:
     """Resume a paused (interrupted) turn with the user's confirm/cancel reply."""
+    global _last_tracer
+    run_id = _new_thread_id()
+    _last_tracer = start_run(run_id, "resume", thread_id, reply)
     config = {"configurable": {"thread_id": thread_id}}
     with console.status("[dim]working…[/]", spinner="dots"):
         result = graph.invoke(Command(resume=reply), config=config)
     if _show_interrupt(console, result):
         return True
+    _finalize_trace(_last_tracer, result, settings)
     _render(console, result, reply)
     return False
 
@@ -108,6 +162,11 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    configure_logging(settings.log_level, settings.logs_dir)
+    langsmith_key = (
+        settings.langsmith_api_key.get_secret_value() if settings.langsmith_api_key else None
+    )
+    langsmith_on = enable_langsmith(langsmith_key)
     user_id = args.user or settings.default_user
     console = Console()
 
@@ -121,7 +180,10 @@ def main() -> None:
     deps = AgentDeps.create(settings)
     graph = build_graph(deps=deps)
     thread_id = _new_thread_id()
-    console.print(f"[dim]user={user_id}  persona={settings.default_persona}  thread={thread_id}[/]")
+    obs = f"traces={settings.traces_dir}/" + ("  langsmith=on" if langsmith_on else "")
+    console.print(
+        f"[dim]user={user_id}  persona={settings.default_persona}  thread={thread_id}  {obs}[/]"
+    )
 
     awaiting_confirm = False
     while True:
@@ -141,7 +203,7 @@ def main() -> None:
         # While a destructive op is pending, the next message is the confirm/cancel reply.
         if awaiting_confirm:
             try:
-                awaiting_confirm = _resume_turn(graph, console, text, thread_id)
+                awaiting_confirm = _resume_turn(graph, console, text, thread_id, settings)
             except Exception as exc:  # noqa: BLE001 — keep the REPL alive on any error
                 awaiting_confirm = False
                 console.print(f"[red]Error:[/] {exc}")
@@ -149,6 +211,29 @@ def main() -> None:
 
         if text == "/help":
             console.print(_HELP)
+            continue
+        if text == "/trace":
+            if _last_tracer is None:
+                console.print("[dim]no turn to trace yet[/]")
+            else:
+                console.print(
+                    Panel(
+                        _last_tracer.render(),
+                        title="Trace",
+                        title_align="left",
+                        border_style="blue",
+                    )
+                )
+            continue
+        if text == "/metrics":
+            console.print(
+                Panel(
+                    SESSION_METRICS.summary(),
+                    title="Metrics",
+                    title_align="left",
+                    border_style="blue",
+                )
+            )
             continue
         if text == "/new":
             thread_id = _new_thread_id()
@@ -183,7 +268,7 @@ def main() -> None:
             continue
 
         try:
-            awaiting_confirm = _run_turn(graph, console, text, user_id, thread_id)
+            awaiting_confirm = _run_turn(graph, console, text, user_id, thread_id, settings)
         except Exception as exc:  # noqa: BLE001 — keep the REPL alive on any error
             console.print(f"[red]Error:[/] {exc}")
 

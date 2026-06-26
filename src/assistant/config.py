@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     # --- Observability ---
     langsmith_api_key: SecretStr | None = Field(None, alias="LANGSMITH_API_KEY")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
+    traces_dir: str = Field("traces", alias="TRACES_DIR")
+    logs_dir: str = Field("logs", alias="LOGS_DIR")
 
     @field_validator("pii_mask_columns", mode="before")
     @classmethod

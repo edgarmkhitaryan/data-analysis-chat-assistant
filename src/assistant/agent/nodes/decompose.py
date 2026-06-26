@@ -15,8 +15,29 @@ from pydantic import BaseModel, Field
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.state import AgentState, SubResult
 from assistant.llm import get_chat_model, resilient_invoke
+from assistant.observability import get_tracer, summarize_delta
 
 logger = logging.getLogger(__name__)
+
+
+def _run_pipeline(pipeline, sub_state: dict, tracer, sub_run_id: str | None) -> dict:
+    """Run the analysis pipeline once, recording each node's step into the trace.
+
+    When a tracer is active we ``stream`` the subgraph so every inner node (retrieve,
+    generate_sql attempts, execute errors, self_correct, mask, report) becomes an
+    ordered trace event with timing (plan/009 §2); otherwise we ``invoke`` plainly.
+    The final sub-state is reconstructed from the streamed deltas.
+    """
+    if tracer is None:
+        return pipeline.invoke(sub_state)
+    final: dict = {}
+    sub_field = {"sub": sub_run_id} if sub_run_id else {}
+    for update in pipeline.stream(sub_state, stream_mode="updates"):
+        for node, delta in update.items():
+            tracer.event(node, **sub_field, **summarize_delta(node, delta))
+            if isinstance(delta, dict):
+                final.update(delta)
+    return final
 
 
 class Decomposition(BaseModel):
@@ -73,6 +94,8 @@ def run_compound(state: AgentState, pipeline) -> dict:
     persona = state.get("persona")
     user_prefs = state.get("user_prefs")
     user_id = state.get("user_id")
+    tracer = get_tracer()
+    is_compound = bool(state.get("is_compound"))
 
     results: list[SubResult] = []
     for index, sub_question in enumerate(sub_questions, start=1):
@@ -88,7 +111,7 @@ def run_compound(state: AgentState, pipeline) -> dict:
             "messages": [],
         }
         try:
-            out = pipeline.invoke(sub_state)
+            out = _run_pipeline(pipeline, sub_state, tracer, sub_run_id if is_compound else None)
         except Exception as exc:  # noqa: BLE001 — isolate sub-question failures
             logger.warning("Sub-question failed (%r): %s", sub_question, exc)
             results.append(
