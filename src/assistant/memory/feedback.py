@@ -23,9 +23,12 @@ from assistant.golden.models import Trio
 
 logger = logging.getLogger(__name__)
 
-# A neutral rubric for the loop's faithfulness check (no per-case rubric here).
-_FAITHFULNESS_RUBRIC = (
-    "The report should answer the question with concrete figures and contain no "
+# A neutral rubric for the loop's judge (no per-case rubric here). It must demand
+# completeness as well as faithfulness so a faithful-but-incomplete answer (e.g. a
+# comparison that silently dropped one side) scores low on intent-satisfaction.
+_LEARNING_RUBRIC = (
+    "A good answer fully addresses every part of the question with concrete figures, leaves "
+    "no requested part unanswered or marked 'not available'/'no data', and makes no "
     "fabricated or unsupported claims."
 )
 
@@ -73,15 +76,18 @@ def decide(
     candidate: Candidate,
     max_similarity: float,
     faithfulness: int,
+    intent_satisfaction: int,
     *,
     dedup_threshold: float,
     faithfulness_bar: int,
+    intent_bar: int,
     max_attempts: int = 2,
 ) -> GateResult:
-    """Pure promotion decision given precomputed dedup similarity + judge score.
+    """Pure promotion decision given precomputed dedup similarity + judge scores.
 
     Order matters (cheapest, most decisive first): metrics, then novelty, then the
-    LLM-judge faithfulness bar.
+    LLM-judge bars — BOTH faithfulness AND intent-satisfaction, so a faithful but
+    incomplete answer (one that didn't actually answer the question) is not learned.
     """
     metrics = _check_metrics(candidate, max_attempts)
     if not metrics.approved:
@@ -92,6 +98,10 @@ def decide(
         )
     if faithfulness < faithfulness_bar:
         return GateResult(False, [f"faithfulness {faithfulness} below bar {faithfulness_bar}"])
+    if intent_satisfaction < intent_bar:
+        return GateResult(
+            False, [f"intent-satisfaction {intent_satisfaction} below bar {intent_bar}"]
+        )
     return GateResult(True)
 
 
@@ -135,19 +145,28 @@ def promote_if_qualified(candidate: Candidate, deps, judge_fn=judge_report) -> G
         logger.info("learning: discard %s — %s", candidate.run_id, reason)
         return GateResult(False, [reason])
 
-    # Stage 3 — LLM-as-judge faithfulness.
-    score = judge_fn(candidate.question, candidate.report, _FAITHFULNESS_RUBRIC, settings)
+    # Stage 3 — LLM-as-judge: must clear BOTH faithfulness AND intent-satisfaction
+    # (a faithful but incomplete answer must not be learned).
+    score = judge_fn(candidate.question, candidate.report, _LEARNING_RUBRIC, settings)
     if score.faithfulness < settings.learning_faithfulness_bar:
         reason = f"faithfulness {score.faithfulness} below bar {settings.learning_faithfulness_bar}"
+        logger.info("learning: discard %s — %s", candidate.run_id, reason)
+        return GateResult(False, [reason])
+    if score.intent_satisfaction < settings.learning_intent_bar:
+        reason = (
+            f"intent-satisfaction {score.intent_satisfaction} below bar "
+            f"{settings.learning_intent_bar}"
+        )
         logger.info("learning: discard %s — %s", candidate.run_id, reason)
         return GateResult(False, [reason])
 
     trio_id = promote_candidate(candidate, deps)
     logger.info(
-        "learning: promoted %s -> %s (similarity %.2f, faithfulness %d)",
+        "learning: promoted %s -> %s (similarity %.2f, faithfulness %d, intent %d)",
         candidate.run_id,
         trio_id,
         max_similarity,
         score.faithfulness,
+        score.intent_satisfaction,
     )
     return GateResult(True, trio_id=trio_id)

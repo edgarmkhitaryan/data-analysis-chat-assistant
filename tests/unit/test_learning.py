@@ -26,13 +26,15 @@ def _candidate(**overrides) -> Candidate:
     return Candidate(**base)
 
 
-def _verdict(candidate=None, max_similarity=0.10, faithfulness=5):
+def _verdict(candidate=None, max_similarity=0.10, faithfulness=5, intent_satisfaction=5):
     return decide(
         candidate or _candidate(),
         max_similarity,
         faithfulness,
+        intent_satisfaction,
         dedup_threshold=DEDUP,
         faithfulness_bar=BAR,
+        intent_bar=BAR,
     )
 
 
@@ -67,3 +69,10 @@ def test_low_faithfulness_is_not_promoted():
 
 def test_faithfulness_at_bar_is_promoted():
     assert _verdict(faithfulness=4).approved
+
+
+def test_low_intent_satisfaction_is_not_promoted():
+    # Faithful but incomplete (e.g. a comparison that silently dropped one side).
+    verdict = _verdict(intent_satisfaction=3)  # below bar of 4
+    assert not verdict.approved
+    assert "intent" in verdict.reasons[0].lower()

@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     learning_loop_enabled: bool = Field(True, alias="LEARNING_LOOP_ENABLED")
     learning_dedup_similarity: float = Field(0.93, alias="LEARNING_DEDUP_SIMILARITY")
     learning_faithfulness_bar: int = Field(4, alias="LEARNING_FAITHFULNESS_BAR")
+    learning_intent_bar: int = Field(4, alias="LEARNING_INTENT_BAR")
 
     # --- Identity & persona ---
     default_persona: str = Field("concise_exec", alias="DEFAULT_PERSONA")
