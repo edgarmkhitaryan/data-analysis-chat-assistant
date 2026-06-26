@@ -82,6 +82,7 @@ from assistant.agent.nodes.reports_cmd import (
     resolve_targets,
     respond_none,
     save_report,
+    view_report,
 )
 from assistant.agent.nodes.retrieve import retrieve_golden
 from assistant.agent.nodes.schema import get_schema
@@ -223,6 +224,7 @@ def build_graph(
     builder.add_node("parse_report_command", lambda state: parse_report_command(state, deps))
     builder.add_node("save_report", lambda state: save_report(state, deps))
     builder.add_node("list_reports", lambda state: list_reports(state, deps))
+    builder.add_node("view_report", lambda state: view_report(state, deps))
     builder.add_node("resolve_targets", lambda state: resolve_targets(state, deps))
     builder.add_node("respond_none", respond_none)
     builder.add_node("confirm_delete", lambda state: confirm_delete(state, deps))
@@ -256,10 +258,16 @@ def build_graph(
     builder.add_conditional_edges(
         "parse_report_command",
         _after_parse_report,
-        {"save": "save_report", "list": "list_reports", "delete": "resolve_targets"},
+        {
+            "save": "save_report",
+            "list": "list_reports",
+            "view": "view_report",
+            "delete": "resolve_targets",
+        },
     )
     builder.add_edge("save_report", END)
     builder.add_edge("list_reports", END)
+    builder.add_edge("view_report", END)
     builder.add_conditional_edges(
         "resolve_targets", _after_resolve, {"confirm": "confirm_delete", "none": "respond_none"}
     )

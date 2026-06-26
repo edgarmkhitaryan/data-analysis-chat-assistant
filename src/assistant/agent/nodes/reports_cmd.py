@@ -30,22 +30,41 @@ _AFFIRMATIVE = {"confirm", "yes", "y", "yes, delete", "delete", "confirm delete"
 class ReportCommand(BaseModel):
     """Parsed saved-reports command."""
 
-    action: Literal["save", "list", "delete"]
+    action: Literal["save", "list", "delete", "view"]
+    name: str | None = Field(
+        default=None,
+        description="a specific report the user gives or references (title or id) — for save, "
+        'the name to store it under ("save it as Q2 Review"); for view, the report to show '
+        '("show me the Globex report", "open report 7ab3e20a"); for delete, the report they '
+        'name ("delete the report called Q2 Review")',
+    )
     client: str | None = Field(
         default=None, description="for delete: a client/entity name to match, if mentioned"
     )
     scope_today: bool = Field(
         default=False, description="for delete: true if it targets reports made today"
     )
+    all_reports: bool = Field(
+        default=False,
+        description='for delete ONLY: true if the user EXPLICITLY asks to delete ALL their '
+        'reports with no other qualifier (e.g. "delete all my reports", "delete everything")',
+    )
 
 
 _PARSE_SYSTEM = (
     "Parse a command about a manager's SAVED REPORTS library into a structured form.\n"
-    '- action: "save" (save the last report), "list" (show saved reports), or "delete".\n'
-    "- For delete only: set client to the client/entity name if the user names one "
-    '(e.g. "delete reports mentioning Acme" -> client="Acme"); set scope_today=true if '
-    'they target reports made today (e.g. "delete the reports we made today"). If they '
-    'say "delete all my reports" with no qualifier, leave client null and scope_today false.'
+    '- action: "save" (save the last report), "list" (show the saved-reports library), '
+    '"view" (show the full content of one named/identified report, e.g. "show me the Globex '
+    'report", "open report 7ab3e20a"), or "delete".\n'
+    "- name: the specific report title or id the user gives or references. For save, the name to "
+    'store it under (e.g. "save it as Q2 Review" -> name="Q2 Review"). For delete, the title '
+    'they name (e.g. "delete the report called Q2 Review" -> name="Q2 Review").\n'
+    '- client (delete only): a client/entity to match if mentioned (e.g. "delete reports '
+    'mentioning Acme" -> client="Acme").\n'
+    "- scope_today (delete only): true if they target reports made today.\n"
+    '- all_reports (delete only): true ONLY if they explicitly ask to delete ALL their reports '
+    'with no other qualifier (e.g. "delete all my reports", "delete everything"). If they name '
+    "a specific report or client, leave all_reports false."
 )
 
 
@@ -64,7 +83,12 @@ def parse_report_command(state: AgentState, deps: AgentDeps) -> dict:
         return {"report_action": "list", "report_filters": {}}
     return {
         "report_action": cmd.action,
-        "report_filters": {"client": cmd.client, "today": cmd.scope_today},
+        "report_filters": {
+            "name": cmd.name,
+            "client": cmd.client,
+            "today": cmd.scope_today,
+            "all": cmd.all_reports,
+        },
     }
 
 
@@ -88,12 +112,14 @@ def _preceding_report(state: AgentState) -> tuple[str | None, str | None]:
 
 def save_report(state: AgentState, deps: AgentDeps) -> dict:
     """Persist the most recent analysis report to the user's library."""
-    content, title = _preceding_report(state)
+    content, fallback_title = _preceding_report(state)
     if not content:
         message = "There's no report to save yet — ask a data question first, then save the answer."
         return {"report": message, "messages": [AIMessage(content=message)]}
 
-    title = (title or content.splitlines()[0])[:80]
+    # Prefer the name the user asked for ("save it as X"); fall back to the question.
+    requested = (state.get("report_filters") or {}).get("name")
+    title = (requested or fallback_title or content.splitlines()[0]).strip()[:80]
     report = deps.reports.save(state["user_id"], title=title, content=content)
     deps.reports.record_audit(state["user_id"], "save", f"id={report.id} title={report.title!r}")
     message = f"Saved your report as **{report.title}** (id `{report.id}`)."
@@ -111,12 +137,51 @@ def list_reports(state: AgentState, deps: AgentDeps) -> dict:
     return {"report": message, "messages": [AIMessage(content=message)]}
 
 
-def resolve_targets(state: AgentState, deps: AgentDeps) -> dict:
-    """Resolve the reports a delete would affect (owner-scoped) into ``pending_action``."""
-    filters = state.get("report_filters") or {}
-    matches = deps.reports.find(
-        state["user_id"], client=filters.get("client"), today=bool(filters.get("today"))
+def view_report(state: AgentState, deps: AgentDeps) -> dict:
+    """Show the full content of one saved report, resolved by id or title (owner-scoped)."""
+    ref = (state.get("report_filters") or {}).get("name")
+    if not ref:
+        message = 'Which report? Name it (e.g. "show me the Globex report") or use its id.'
+        return {"report": message, "messages": [AIMessage(content=message)]}
+
+    report = deps.reports.get(ref, state["user_id"])  # exact id first
+    if report is None:
+        matches = deps.reports.find(state["user_id"], name=ref)  # then title match
+        if len(matches) == 1:
+            report = matches[0]
+        elif len(matches) > 1:
+            lines = [f"- **{r.title}** — id `{r.id}`" for r in matches]
+            message = f"Several reports match {ref!r} — which one?\n" + "\n".join(lines)
+            return {"report": message, "messages": [AIMessage(content=message)]}
+        else:
+            message = f"You have no saved report matching {ref!r}."
+            return {"report": message, "messages": [AIMessage(content=message)]}
+
+    message = (
+        f"**{report.title}** — id `{report.id}` ({report.created_at[:10]})\n\n{report.content}"
     )
+    return {"report": message, "messages": [AIMessage(content=message)]}
+
+
+def resolve_targets(state: AgentState, deps: AgentDeps) -> dict:
+    """Resolve the reports a delete would affect (owner-scoped) into ``pending_action``.
+
+    Safety: a delete with NO qualifier (no name/client/today and not an explicit "all")
+    must never silently target every report. It resolves to no match so the user is asked
+    to be specific — preventing a vague request from proposing a delete-all.
+    """
+    filters = state.get("report_filters") or {}
+    name = filters.get("name")
+    client = filters.get("client")
+    today = bool(filters.get("today"))
+    delete_all = bool(filters.get("all"))
+
+    if delete_all:
+        matches = deps.reports.list(state["user_id"])
+    elif name or client or today:
+        matches = deps.reports.find(state["user_id"], name=name, client=client, today=today)
+    else:
+        matches = []  # unqualified delete: refuse to target everything by default
     if not matches:
         return {"pending_action": None}
 
@@ -138,15 +203,28 @@ def resolve_targets(state: AgentState, deps: AgentDeps) -> dict:
 
 
 def respond_none(state: AgentState) -> dict:
-    """No reports matched the delete request — say so plainly (no interrupt)."""
+    """No reports matched (or the request was too vague) — say so plainly (no interrupt)."""
     filters = state.get("report_filters") or {}
-    if filters.get("client"):
-        scope = f" mentioning {filters['client']}"
-    elif filters.get("today"):
-        scope = " from today"
+    name = filters.get("name")
+    client = filters.get("client")
+    today = filters.get("today")
+    delete_all = filters.get("all")
+    if not (name or client or today or delete_all):
+        # Vague delete with no target: ask the user to be specific (never delete-all).
+        message = (
+            'Which report would you like to delete? Name it (e.g. "delete the report called '
+            'Q2 Review"), or say "delete all my reports" to remove them all.'
+        )
     else:
-        scope = ""
-    message = f"You have no saved reports{scope} to delete."
+        if name:
+            scope = f" named {name!r}"
+        elif client:
+            scope = f" mentioning {client}"
+        elif today:
+            scope = " from today"
+        else:
+            scope = ""
+        message = f"You have no saved reports{scope} to delete."
     return {"report": message, "messages": [AIMessage(content=message)]}
 
 

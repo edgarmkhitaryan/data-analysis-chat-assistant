@@ -45,23 +45,12 @@ def json_safe_row(row: dict[str, Any]) -> dict[str, Any]:
     return {key: to_json_safe(value) for key, value in row.items()}
 
 
-FORMAT_INSTRUCTIONS = {
-    "table": "Present the core results as a Markdown table.",
-    "bullets": "Present the answer as concise bullet points.",
-    "prose": "Write the answer in short prose paragraphs.",
-}
-
-VERBOSITY_INSTRUCTIONS = {
-    "concise": "Keep it brief: lead with the headline and only the figures that matter.",
-    "detailed": "Provide thorough detail and useful context around the numbers.",
-}
-
-
 def compose_system_prompt(state: dict, base: str) -> str:
-    """Compose a report system prompt: base + org persona (tone) + user format/verbosity.
+    """Compose a report system prompt: base + org persona (tone) + the user's free-form prefs.
 
-    Shared by the per-question report node and the compound-question synthesizer so
-    both honor the same persona and preferences.
+    Shared by the per-question report node and the compound-question synthesizer so both
+    honor the same persona, the user's stored compact preferences, and any one-off
+    preference that applies to this turn only.
     """
     parts = [base]
 
@@ -75,8 +64,14 @@ def compose_system_prompt(state: dict, base: str) -> str:
             parts.append("Guardrails:\n- " + "\n- ".join(persona.guardrails))
 
     prefs = state.get("user_prefs")
-    if prefs is not None:
-        parts.append(FORMAT_INSTRUCTIONS.get(prefs.format, ""))
-        parts.append(VERBOSITY_INSTRUCTIONS.get(prefs.verbosity, ""))
+    if prefs is not None and prefs.preferences:
+        parts.append(
+            "The user's standing preferences for their reports (honor these): "
+            f"{prefs.preferences}"
+        )
+
+    oneoff = state.get("oneoff_preference")
+    if oneoff:
+        parts.append(f"For THIS answer only, additionally: {oneoff}")
 
     return "\n\n".join(part for part in parts if part)

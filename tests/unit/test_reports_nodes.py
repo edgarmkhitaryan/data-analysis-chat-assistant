@@ -14,6 +14,7 @@ from assistant.agent.nodes.reports_cmd import (
     resolve_targets,
     respond_none,
     save_report,
+    view_report,
 )
 from assistant.reports.store import SavedReportStore
 
@@ -39,6 +40,20 @@ def test_save_report_persists_last_ai_message(deps):
     assert "saved" in out["report"].lower()
 
 
+def test_save_report_uses_requested_name(deps):
+    state = {
+        "user_id": "manager_a",
+        "report_filters": {"name": "My Q2 Review"},
+        "messages": [
+            HumanMessage(content="top products by revenue"),
+            AIMessage(content="Zenith leads with $5,000.00 in revenue."),
+        ],
+    }
+    save_report(state, deps)
+    saved = deps.reports.list("manager_a")
+    assert saved[0].title == "My Q2 Review"  # the user-given name, not the question
+
+
 def test_save_report_without_prior_report(deps):
     out = save_report({"user_id": "manager_a", "messages": [HumanMessage(content="save it")]}, deps)
     assert "no report" in out["report"].lower()
@@ -52,6 +67,30 @@ def test_list_reports_empty_then_nonempty(deps):
     deps.reports.save("manager_a", title="R1", content="x")
     out = list_reports({"user_id": "manager_a"}, deps)
     assert "R1" in out["report"]
+
+
+def test_view_report_by_id_shows_content(deps):
+    r = deps.reports.save("manager_a", title="Q2", content="Revenue was $5,000.")
+    out = view_report({"user_id": "manager_a", "report_filters": {"name": r.id}}, deps)
+    assert "Revenue was $5,000." in out["report"]
+    assert r.id in out["report"]
+
+
+def test_view_report_by_title(deps):
+    deps.reports.save("manager_a", title="Globex monthly", content="Globex did well.")
+    out = view_report({"user_id": "manager_a", "report_filters": {"name": "globex"}}, deps)
+    assert "Globex did well." in out["report"]
+
+
+def test_view_report_not_found(deps):
+    out = view_report({"user_id": "manager_a", "report_filters": {"name": "nope"}}, deps)
+    assert "no saved report" in out["report"].lower()
+
+
+def test_view_report_is_owner_scoped(deps):
+    r = deps.reports.save("manager_b", title="Secret", content="b only")
+    out = view_report({"user_id": "manager_a", "report_filters": {"name": r.id}}, deps)
+    assert "no saved report" in out["report"].lower()  # A cannot view B's report
 
 
 def test_resolve_targets_sets_pending_action(deps):
@@ -72,7 +111,38 @@ def test_resolve_targets_no_match_returns_none(deps):
     assert out["pending_action"] is None
 
 
+def test_resolve_targets_by_name(deps):
+    deps.reports.save("manager_a", title="My Q2 Review", content="x")
+    deps.reports.save("manager_a", title="Globex monthly", content="y")
+    out = resolve_targets(
+        {"user_id": "manager_a", "report_filters": {"name": "q2 review"}}, deps
+    )
+    pending = out["pending_action"]
+    assert pending and len(pending["target_ids"]) == 1
+
+
+def test_unqualified_delete_never_targets_all(deps):
+    # Two reports exist, but a delete with NO qualifier must not propose deleting them all.
+    deps.reports.save("manager_a", title="R1", content="x")
+    deps.reports.save("manager_a", title="R2", content="y")
+    out = resolve_targets({"user_id": "manager_a", "report_filters": {}}, deps)
+    assert out["pending_action"] is None  # safety: vague delete targets nothing
+
+
+def test_explicit_delete_all_targets_everything(deps):
+    deps.reports.save("manager_a", title="R1", content="x")
+    deps.reports.save("manager_a", title="R2", content="y")
+    out = resolve_targets({"user_id": "manager_a", "report_filters": {"all": True}}, deps)
+    pending = out["pending_action"]
+    assert pending and len(pending["target_ids"]) == 2
+
+
 def test_respond_none_mentions_filter(deps):
     out = respond_none({"report_filters": {"client": "Acme"}})
     assert "no saved reports" in out["report"].lower()
     assert "Acme" in out["report"]
+
+
+def test_respond_none_vague_delete_asks_to_be_specific(deps):
+    out = respond_none({"report_filters": {}})
+    assert "which report" in out["report"].lower()

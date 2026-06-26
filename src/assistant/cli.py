@@ -7,7 +7,9 @@ to resolve follow-ups, and clarifications are rendered distinctly.
 """
 
 import argparse
+import json
 import logging
+import sys
 import threading
 import uuid
 
@@ -34,6 +36,7 @@ Commands:
   /login <id>  switch the current manager (drives preferences + ownership)
   /prefs       show the current user's saved preferences
   /reports     list your saved reports
+  /report <id> show a saved report's full content
   /save        save the last report to your library
   /trace       show the trace (step timeline) of the last turn
   /metrics     show session metrics (success, self-correction, PII, cost)
@@ -58,6 +61,21 @@ def _promote_async(candidate: Candidate, deps: AgentDeps) -> None:
         logging.getLogger(__name__).warning("learning loop failed", exc_info=True)
 
 
+def _turn_status(result: dict) -> str:
+    """Classify a finished turn for the trace outcome and the --json output (shared)."""
+    if result.get("needs_clarification"):
+        return "clarification"
+    if result.get("intent") == "rejected":
+        return "rejected"
+    if result.get("intent") == "update_preference":
+        return "preference"
+    if result.get("intent") == "manage_reports":
+        return "reports"
+    if result.get("last_error"):
+        return "degraded"
+    return "success"
+
+
 def _finalize_trace(tracer: Tracer, result: dict, settings: Settings, deps: AgentDeps) -> None:
     """Record the turn's header + outcome, persist the trace, metrics, and a candidate."""
     tracer.set_header(
@@ -66,18 +84,7 @@ def _finalize_trace(tracer: Tracer, result: dict, settings: Settings, deps: Agen
         intent=result.get("intent"),
         is_compound=result.get("is_compound"),
     )
-    if result.get("needs_clarification"):
-        status = "clarification"
-    elif result.get("intent") == "rejected":
-        status = "rejected"
-    elif result.get("intent") == "update_preference":
-        status = "preference"
-    elif result.get("intent") == "manage_reports":
-        status = "reports"
-    elif result.get("last_error"):
-        status = "degraded"
-    else:
-        status = "success"
+    status = _turn_status(result)
     tracer.finalize(
         status=status,
         rows=result.get("row_count"),
@@ -139,6 +146,25 @@ def _show_interrupt(console: Console, result: dict) -> bool:
     return True
 
 
+def _initial_state(question: str, user_id: str, thread_id: str, run_id: str) -> dict:
+    """Per-turn graph input. Resets the analysis outputs so a non-analysis turn
+    (preference/reports/reject) never re-renders the previous turn's SQL/rows held in
+    the checkpoint — LangGraph input overwrites the LastValue channels, including None.
+    """
+    return {
+        "messages": [HumanMessage(content=question)],
+        "raw_question": question,
+        "question": question,
+        "user_id": user_id,
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "sql_attempts": 0,
+        "last_error": None,
+        "generated_sql": None,
+        "row_count": 0,
+    }
+
+
 def _run_turn(
     graph,
     console: Console,
@@ -152,20 +178,7 @@ def _run_turn(
     global _last_tracer
     run_id = _new_thread_id()
     _last_tracer = start_run(run_id, user_id, thread_id, question)
-    initial = {
-        "messages": [HumanMessage(content=question)],
-        "raw_question": question,
-        "question": question,
-        "user_id": user_id,
-        "thread_id": thread_id,
-        "run_id": run_id,
-        "sql_attempts": 0,
-        "last_error": None,
-        # Reset analysis outputs so a non-analysis turn (preference/reports/reject)
-        # never re-renders the previous turn's SQL/rows held in the checkpoint.
-        "generated_sql": None,
-        "row_count": 0,
-    }
+    initial = _initial_state(question, user_id, thread_id, run_id)
     config = {"configurable": {"thread_id": thread_id}}
     with console.status("[dim]thinking…[/]", spinner="dots"):
         result = graph.invoke(initial, config=config)
@@ -196,9 +209,171 @@ def _resume_turn(
     return False
 
 
+def _emit(obj: dict) -> None:
+    """Write exactly one JSON object as a line to stdout, flushed (stream-friendly)."""
+    print(json.dumps(obj, default=str), flush=True)
+
+
+def _turn_obj(result: dict, run_id: str) -> dict:
+    """Machine-readable form of a finished turn — the --json counterpart of _render."""
+    return {
+        "type": "turn",
+        "run_id": run_id,
+        "question": result.get("question"),
+        "intent": result.get("intent"),
+        "status": _turn_status(result),
+        "needs_clarification": bool(result.get("needs_clarification")),
+        "history_used": bool(result.get("history_used")),
+        "sql": result.get("generated_sql"),
+        "row_count": result.get("row_count"),
+        "report": result.get("report"),
+    }
+
+
+def _interrupt_obj(result: dict, run_id: str) -> dict | None:
+    """Return the awaiting-confirmation object if the turn paused, else None."""
+    interrupts = result.get("__interrupt__")
+    if not interrupts:
+        return None
+    payload = interrupts[0].value
+    summary = payload.get("summary") if isinstance(payload, dict) else str(payload)
+    return {"type": "awaiting_confirmation", "run_id": run_id, "summary": summary}
+
+
+def _run_batch_json(graph, settings: Settings, deps: AgentDeps, user_id: str) -> None:
+    """Non-interactive batch mode for agents/automation (``assistant --json``).
+
+    One process, one ``thread_id`` → the SAME conversation memory as the REPL
+    (follow-ups resolve via history); durable preferences/reports/golden apply as
+    usual. Reads one turn per stdin line and writes exactly one JSON object per line
+    to stdout, flushed, so a reader-then-writer driver can go turn-by-turn. Every
+    object carries a ``type``: turn | awaiting_confirmation | prefs | whoami |
+    metrics | trace | new_thread | login | help | error.
+    """
+    global _last_tracer
+    thread_id = _new_thread_id()
+    awaiting_confirm = False
+    while True:
+        raw = sys.stdin.readline()
+        if raw == "":  # EOF — end of the batch
+            break
+        text = raw.strip()
+        if not text:
+            continue
+        if text in ("/exit", "/quit"):
+            break
+
+        # While a destructive op is pending, this line is the confirm/cancel reply.
+        if awaiting_confirm:
+            try:
+                run_id = _new_thread_id()
+                _last_tracer = start_run(run_id, "resume", thread_id, text)
+                config = {"configurable": {"thread_id": thread_id}}
+                result = graph.invoke(Command(resume=text), config=config)
+                pending = _interrupt_obj(result, run_id)
+                if pending:
+                    _emit(pending)
+                else:
+                    _finalize_trace(_last_tracer, result, settings, deps)
+                    _emit(_turn_obj(result, run_id))
+                    awaiting_confirm = False
+            except Exception as exc:  # noqa: BLE001 — keep the batch loop alive
+                awaiting_confirm = False
+                _emit({"type": "error", "message": str(exc)})
+            continue
+
+        # Inspection / control commands, answered as JSON (no graph turn).
+        if text == "/help":
+            _emit({"type": "help", "commands": _HELP})
+            continue
+        if text == "/new":
+            thread_id = _new_thread_id()
+            _emit({"type": "new_thread", "thread": thread_id})
+            continue
+        if text == "/whoami":
+            _emit({"type": "whoami", "user": user_id, "thread": thread_id})
+            continue
+        if text == "/metrics":
+            _emit({"type": "metrics", "summary": SESSION_METRICS.summary()})
+            continue
+        if text == "/trace":
+            _emit({"type": "trace", "render": _last_tracer.render() if _last_tracer else None})
+            continue
+        if text == "/prefs":
+            prefs = deps.profiles.get(user_id)
+            _emit(
+                {
+                    "type": "prefs",
+                    "user": user_id,
+                    "preferences": prefs.preferences,
+                    "updated_at": prefs.updated_at,
+                }
+            )
+            continue
+        if text.startswith("/login"):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2 and parts[1].strip():
+                user_id = parts[1].strip()
+                _emit({"type": "login", "user": user_id})
+            else:
+                _emit({"type": "error", "message": "usage: /login <user_id>"})
+            continue
+        if text == "/report" or text.startswith("/report "):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2 and parts[1].strip():
+                report = deps.reports.get(parts[1].strip(), user_id)
+                if report is None:
+                    _emit({"type": "error", "message": f"no report with id {parts[1].strip()}"})
+                else:
+                    _emit(
+                        {
+                            "type": "report_view",
+                            "id": report.id,
+                            "title": report.title,
+                            "created_at": report.created_at,
+                            "content": report.content,
+                        }
+                    )
+            else:
+                _emit({"type": "error", "message": "usage: /report <id>"})
+            continue
+        if text == "/save":
+            text = "save the last report"
+        elif text == "/reports":
+            text = "list my saved reports"
+        elif text.startswith("/"):
+            _emit({"type": "error", "message": f"unknown command: {text}"})
+            continue
+
+        # A normal turn through the graph.
+        try:
+            run_id = _new_thread_id()
+            _last_tracer = start_run(run_id, user_id, thread_id, text)
+            config = {"configurable": {"thread_id": thread_id}}
+            result = graph.invoke(_initial_state(text, user_id, thread_id, run_id), config=config)
+            pending = _interrupt_obj(result, run_id)
+            if pending:
+                _last_tracer.finalize(status="awaiting_confirmation")
+                _last_tracer.save(settings.traces_dir)
+                _emit(pending)
+                awaiting_confirm = True
+            else:
+                _finalize_trace(_last_tracer, result, settings, deps)
+                _emit(_turn_obj(result, run_id))
+        except Exception as exc:  # noqa: BLE001 — keep the batch loop alive
+            _emit({"type": "error", "message": str(exc)})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="assistant", description="Data Analysis Chat Assistant")
     parser.add_argument("--user", default=None, help="manager identity (default from config)")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_mode",
+        help="batch mode for agents/automation: read one turn per stdin line, "
+        "emit one JSON object per line on stdout (the interactive REPL is unchanged)",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -208,8 +383,16 @@ def main() -> None:
     )
     langsmith_on = enable_langsmith(langsmith_key)
     user_id = args.user or settings.default_user
-    console = Console()
+    deps = AgentDeps.create(settings)
+    graph = build_graph(deps=deps)
 
+    # Non-interactive batch mode for agents/automation: JSON in, JSON out, with the
+    # same single-process conversation memory as the REPL. Returns before any chrome.
+    if args.json_mode:
+        _run_batch_json(graph, settings, deps, user_id)
+        return
+
+    console = Console()
     console.print(
         Panel.fit(
             "[bold]Data Analysis Chat Assistant[/]\n"
@@ -217,8 +400,6 @@ def main() -> None:
             border_style="cyan",
         )
     )
-    deps = AgentDeps.create(settings)
-    graph = build_graph(deps=deps)
     thread_id = _new_thread_id()
     obs = f"traces={settings.traces_dir}/" + ("  langsmith=on" if langsmith_on else "")
     console.print(
@@ -293,9 +474,30 @@ def main() -> None:
         if text == "/prefs":
             prefs = deps.profiles.get(user_id)
             console.print(
-                f"[dim]format={prefs.format}  verbosity={prefs.verbosity}  "
-                f"updated={prefs.updated_at or 'never'}[/]"
+                f"[dim]preferences: {prefs.preferences or '(none set)'}"
+                f"  · updated={prefs.updated_at or 'never'}[/]"
             )
+            continue
+        # /report <id> is a read-only convenience: fetch + show directly (owner-scoped,
+        # no LLM), since the id is already explicit. NL ("show me the X report") still
+        # goes through the graph's view path.
+        if text == "/report" or text.startswith("/report "):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2 and parts[1].strip():
+                report = deps.reports.get(parts[1].strip(), user_id)
+                if report is None:
+                    console.print(f"[yellow]No report with id {parts[1].strip()} (or not yours).[/]")
+                else:
+                    console.print(
+                        Panel(
+                            Markdown(report.content),
+                            title=f"{report.title} · {report.id} · {report.created_at[:10]}",
+                            title_align="left",
+                            border_style="green",
+                        )
+                    )
+            else:
+                console.print("[yellow]usage: /report <id>  (see /reports for ids)[/]")
             continue
         # /save and /reports are conveniences that run the same graph path as the
         # equivalent natural-language commands (the CLI holds no business logic).

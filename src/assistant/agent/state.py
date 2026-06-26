@@ -51,12 +51,14 @@ class AgentState(TypedDict, total=False):
     # --- Routing & preferences ---
     intent: Literal["analysis", "manage_reports", "update_preference", "rejected"]
     rejection_reason: str | None
-    pref_update: dict | None
+    # A standing preference the user stated, in their own words (free-form), to be merged
+    # into their stored compact preferences by the update_prefs node.
+    pref_update: str | None
     # Combined intent (Phase 6): a standing preference *and* an analysis question in
     # one message persists the pref AND continues into the analysis.
     also_analysis: bool
-    # A one-off format ("...as bullets just this once") applied to this turn only.
-    oneoff_format: Literal["table", "bullets", "prose"] | None
+    # A one-off preference ("...as bullets just this once") applied to this turn only.
+    oneoff_preference: str | None
     # Acknowledgement prepended to a combined turn's report ("Saved your preference…").
     pref_saved_note: str | None
 
@@ -66,13 +68,13 @@ class AgentState(TypedDict, total=False):
     sub_results: list["SubResult"]
 
     # --- Report management / oversight (manage_reports path) ---
-    report_action: Literal["save", "list", "delete"] | None
+    report_action: Literal["save", "list", "view", "delete"] | None
     report_filters: dict | None
     # Parsed-but-unexecuted destructive op, carried across the confirm interrupt:
     # {action, filters, target_ids, summary}.
     pending_action: dict | None
 
-    # --- Persona (org tone) + user preferences (format/verbosity) ---
+    # --- Persona (org tone) + user preferences (compact free-form text) ---
     persona: Persona
     user_prefs: UserPrefs
 

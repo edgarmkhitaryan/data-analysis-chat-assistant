@@ -11,8 +11,8 @@ Preference handling (Phase 6):
 - A **standing** preference ("from now on use tables") -> ``update_preference``,
   persisted by the ``update_prefs`` node. If the same message *also* asks a data
   question, ``also_analysis`` is set so the turn continues into the analysis.
-- A **one-off** format ("...as bullets just this once") keeps ``intent=analysis``
-  and sets ``oneoff_format`` (applied this turn only, never persisted).
+- A **one-off** preference ("...as bullets just this once") keeps ``intent=analysis``
+  and sets ``oneoff_preference`` (applied this turn only, never persisted).
 
 PII is *not* a concern here: asking for emails/addresses is a normal analysis
 question (masked downstream), so such asks are never rejected. Classification
@@ -41,8 +41,12 @@ class IntentDecision(BaseModel):
         default=False,
         description="true if the message ALSO asks a data question besides any preference",
     )
-    pref_format: Literal["table", "bullets", "prose"] | None = None
-    pref_verbosity: Literal["concise", "detailed"] | None = None
+    preference_instruction: str | None = Field(
+        default=None,
+        description="if the message states how reports should be written or what to "
+        "emphasize, the preference in the user's own words (e.g. 'use tables and always "
+        "include % change vs last quarter'); null if there is no preference",
+    )
     pref_scope: Literal["standing", "one_off"] | None = Field(
         default=None,
         description="standing = persist from now on; one_off = this message only",
@@ -72,11 +76,13 @@ _GUARD_SYSTEM = (
     "One message can BOTH set a standing preference AND ask a data question (e.g. "
     '"from now on use tables, and what were last month\'s top products?"). Then set '
     "intent=update_preference and has_analysis_question=true.\n\n"
-    "Preferences (only when a layout/length is actually specified):\n"
-    "- pref_format: table | bullets | prose\n"
-    "- pref_verbosity: concise | detailed\n"
-    '- pref_scope: "standing" to persist, or "one_off" if it applies only to THIS '
-    'message ("...as bullets just this once"). A one-off keeps intent=analysis.\n\n'
+    "Preferences — set these only when the message expresses how the user wants their "
+    "reports written or what to emphasize (layout, length, tone, metrics to always "
+    "include, currency, audience, etc.):\n"
+    "- preference_instruction: the preference in the user's own words (e.g. \"use tables "
+    'and always include % change vs last quarter").\n'
+    '- pref_scope: "standing" to persist from now on, or "one_off" if it applies only to '
+    'THIS message ("...as bullets just this once"). A one-off keeps intent=analysis.\n\n'
     "Asking for customer emails or addresses is a NORMAL analysis question (the system "
     "masks PII automatically) — never reject it."
 )
@@ -87,7 +93,7 @@ def _base_reset() -> dict:
     return {
         "pref_update": None,
         "also_analysis": False,
-        "oneoff_format": None,
+        "oneoff_preference": None,
         "rejection_reason": None,
         "pref_saved_note": None,
     }
@@ -128,26 +134,22 @@ def guard_input(state: AgentState, deps: AgentDeps) -> dict:
         logger.info("Intent=manage_reports")
         return {**_base_reset(), "intent": "manage_reports"}
 
-    pref: dict[str, str] = {}
-    if decision.pref_format:
-        pref["format"] = decision.pref_format
-    if decision.pref_verbosity:
-        pref["verbosity"] = decision.pref_verbosity
+    instruction = (decision.preference_instruction or "").strip()
 
     # Standing preference -> persist (and continue to analysis if also asked).
-    if decision.intent == "update_preference" and pref and decision.pref_scope != "one_off":
+    if decision.intent == "update_preference" and instruction and decision.pref_scope != "one_off":
         logger.info(
-            "Intent=update_preference %s (also_analysis=%s)", pref, decision.has_analysis_question
+            "Intent=update_preference (also_analysis=%s)", decision.has_analysis_question
         )
         return {
             **_base_reset(),
             "intent": "update_preference",
-            "pref_update": pref,
+            "pref_update": instruction,
             "also_analysis": decision.has_analysis_question,
         }
 
-    # Otherwise it's an analysis turn — carry a one-off format if one was given.
-    oneoff = decision.pref_format if decision.pref_scope == "one_off" else None
+    # Otherwise it's an analysis turn — carry a one-off preference if one was given.
+    oneoff = instruction if decision.pref_scope == "one_off" and instruction else None
     if oneoff:
-        logger.info("Analysis turn with one-off format=%s", oneoff)
-    return {**_base_reset(), "intent": "analysis", "oneoff_format": oneoff}
+        logger.info("Analysis turn with a one-off preference")
+    return {**_base_reset(), "intent": "analysis", "oneoff_preference": oneoff}

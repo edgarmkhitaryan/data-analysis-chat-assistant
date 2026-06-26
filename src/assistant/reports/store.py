@@ -142,16 +142,35 @@ class SavedReportStore:
             ).fetchall()
         return [self._row_to_report(row) for row in rows]
 
-    def find(
-        self, owner_id: str, *, client: str | None = None, today: bool = False
-    ) -> list[SavedReport]:
-        """Return the owner's reports matching the filters (client mention and/or today).
+    def get(self, report_id: str, owner_id: str) -> SavedReport | None:
+        """Fetch one report by id, **owner-scoped** (None if missing or not owned)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM saved_reports WHERE id = ? AND owner_id = ?",
+                (report_id, owner_id),
+            ).fetchone()
+        return self._row_to_report(row) if row else None
 
-        ``client`` matches as a case-insensitive substring of the title, content, or
-        the structured ``clients`` list (so "mentioning Client X" works whether or not
-        the client was tagged). With no filters, returns all the owner's reports.
+    def find(
+        self,
+        owner_id: str,
+        *,
+        name: str | None = None,
+        client: str | None = None,
+        today: bool = False,
+    ) -> list[SavedReport]:
+        """Return the owner's reports matching the filters (name, client mention, today).
+
+        ``name`` matches as a case-insensitive substring of the **title** (so "the report
+        called X" targets that report). ``client`` matches as a case-insensitive substring
+        of the title, content, or the structured ``clients`` list. With no filters, returns
+        all the owner's reports — so destructive callers MUST guard the no-filter case
+        (see :func:`resolve_targets`) to avoid an accidental delete-all.
         """
         reports = self.list(owner_id)
+        if name:
+            needle = name.lower()
+            reports = [r for r in reports if needle in r.title.lower()]
         if client:
             needle = client.lower()
             reports = [r for r in reports if self._mentions(r, needle)]
