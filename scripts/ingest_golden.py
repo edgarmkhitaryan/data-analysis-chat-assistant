@@ -1,10 +1,12 @@
-"""Build (or rebuild) the Golden Bucket embedding index.
+"""Build (or rebuild) the Golden Bucket embedding index from curated Trios.
 
 Reads the Trio JSON files, embeds each question with the configured embedding
 model, and writes the cached index that the retriever loads at query time. Run it
 with ``make ingest`` after adding or editing Trios.
 
-(The learning-loop "promote this interaction" mode is added in Phase 10.)
+Note: the learning loop promotes *learned* Trios **automatically** at runtime
+(plan/010 §3) — there is no manual promotion step. This script is for the curated
+authoring path (analysts adding/editing Trios in ``data/golden_trios/``).
 """
 
 import sys

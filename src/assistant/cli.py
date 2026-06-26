@@ -7,6 +7,8 @@ to resolve follow-ups, and clarifications are rendered distinctly.
 """
 
 import argparse
+import logging
+import threading
 import uuid
 
 from langchain_core.messages import HumanMessage
@@ -18,6 +20,7 @@ from rich.panel import Panel
 from assistant.agent.dependencies import AgentDeps
 from assistant.agent.graph import build_graph
 from assistant.config import Settings, get_settings
+from assistant.memory import Candidate, promote_if_qualified
 from assistant.observability import (
     SESSION_METRICS,
     configure_logging,
@@ -47,8 +50,16 @@ def _new_thread_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def _finalize_trace(tracer: Tracer, result: dict, settings: Settings) -> None:
-    """Record the turn's header + outcome, persist the trace, and update metrics."""
+def _promote_async(candidate: Candidate, deps: AgentDeps) -> None:
+    """Run the automatic learning-loop gate on a worker thread (never crashes the app)."""
+    try:
+        promote_if_qualified(candidate, deps)
+    except Exception:  # noqa: BLE001 — the learning loop must never break the REPL
+        logging.getLogger(__name__).warning("learning loop failed", exc_info=True)
+
+
+def _finalize_trace(tracer: Tracer, result: dict, settings: Settings, deps: AgentDeps) -> None:
+    """Record the turn's header + outcome, persist the trace, metrics, and a candidate."""
     tracer.set_header(
         question=result.get("question"),
         history_used=result.get("history_used"),
@@ -74,6 +85,23 @@ def _finalize_trace(tracer: Tracer, result: dict, settings: Settings) -> None:
     )
     tracer.save(settings.traces_dir)
     SESSION_METRICS.record(tracer)
+
+    # Learning loop (plan/010 §3): on an analysis turn, run the automatic gate
+    # (deterministic metrics -> dedup -> LLM-judge) on a BACKGROUND thread so it never
+    # blocks the answer. No user feedback, no manual trigger, no human in the loop.
+    if result.get("intent") == "analysis" and deps.settings.learning_loop_enabled:
+        attempts = [e.get("attempt") or 0 for e in tracer.events if e["node"] == "generate_sql"]
+        candidate = Candidate(
+            run_id=tracer.run_id,
+            question=result.get("question") or tracer.raw_question,
+            sql=result.get("generated_sql") or "",
+            report=result.get("report") or "",
+            succeeded=status == "success",
+            attempts=max(attempts) if attempts else 0,
+            row_count=result.get("row_count") or 0,
+            pii_leak_prevented=result.get("pii_leak_prevented") or 0,
+        )
+        threading.Thread(target=_promote_async, args=(candidate, deps), daemon=True).start()
 
 
 def _render(console: Console, result: dict, source: str) -> None:
@@ -112,7 +140,13 @@ def _show_interrupt(console: Console, result: dict) -> bool:
 
 
 def _run_turn(
-    graph, console: Console, question: str, user_id: str, thread_id: str, settings: Settings
+    graph,
+    console: Console,
+    question: str,
+    user_id: str,
+    thread_id: str,
+    settings: Settings,
+    deps: AgentDeps,
 ) -> bool:
     """Run one turn; return True if it paused awaiting a confirm/cancel reply."""
     global _last_tracer
@@ -135,13 +169,15 @@ def _run_turn(
         _last_tracer.finalize(status="awaiting_confirmation")
         _last_tracer.save(settings.traces_dir)
         return True
-    _finalize_trace(_last_tracer, result, settings)
+    _finalize_trace(_last_tracer, result, settings, deps)
     _render(console, result, question)
     console.print(f"[dim]run_id={run_id} · /trace for the step timeline[/]")
     return False
 
 
-def _resume_turn(graph, console: Console, reply: str, thread_id: str, settings: Settings) -> bool:
+def _resume_turn(
+    graph, console: Console, reply: str, thread_id: str, settings: Settings, deps: AgentDeps
+) -> bool:
     """Resume a paused (interrupted) turn with the user's confirm/cancel reply."""
     global _last_tracer
     run_id = _new_thread_id()
@@ -151,7 +187,7 @@ def _resume_turn(graph, console: Console, reply: str, thread_id: str, settings: 
         result = graph.invoke(Command(resume=reply), config=config)
     if _show_interrupt(console, result):
         return True
-    _finalize_trace(_last_tracer, result, settings)
+    _finalize_trace(_last_tracer, result, settings, deps)
     _render(console, result, reply)
     return False
 
@@ -203,7 +239,7 @@ def main() -> None:
         # While a destructive op is pending, the next message is the confirm/cancel reply.
         if awaiting_confirm:
             try:
-                awaiting_confirm = _resume_turn(graph, console, text, thread_id, settings)
+                awaiting_confirm = _resume_turn(graph, console, text, thread_id, settings, deps)
             except Exception as exc:  # noqa: BLE001 — keep the REPL alive on any error
                 awaiting_confirm = False
                 console.print(f"[red]Error:[/] {exc}")
@@ -268,7 +304,7 @@ def main() -> None:
             continue
 
         try:
-            awaiting_confirm = _run_turn(graph, console, text, user_id, thread_id, settings)
+            awaiting_confirm = _run_turn(graph, console, text, user_id, thread_id, settings, deps)
         except Exception as exc:  # noqa: BLE001 — keep the REPL alive on any error
             console.print(f"[red]Error:[/] {exc}")
 

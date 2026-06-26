@@ -39,6 +39,16 @@ class GoldenStore:
     def __len__(self) -> int:
         return len(self._trios)
 
+    def add(self, trio: Trio, vector: np.ndarray) -> None:
+        """Append a Trio + its embedding in-memory (used by the live learning loop).
+
+        Lets a freshly promoted Trio be retrievable within the same session without
+        re-embedding the whole bucket; the on-disk index is refreshed separately.
+        """
+        row = _normalize(np.asarray(vector, dtype=np.float32).reshape(1, -1))
+        self._trios.append(trio)
+        self._matrix = row if not len(self._matrix) else np.vstack([self._matrix, row])
+
     def search(self, query_vector: np.ndarray, k: int = 3, floor: float = 0.0) -> list[ScoredTrio]:
         """Return the top-k Trios with similarity >= ``floor``, highest first."""
         if not self._trios:

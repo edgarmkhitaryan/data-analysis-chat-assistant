@@ -9,6 +9,7 @@ import numpy as np
 
 from assistant.config import Settings, get_settings
 from assistant.golden.index import load_or_build_store
+from assistant.golden.models import Trio
 from assistant.golden.store import GoldenStore, ScoredTrio
 from assistant.llm import get_embedder
 
@@ -41,3 +42,23 @@ class GoldenRetriever:
         floor = self._settings.golden_sim_floor if floor is None else floor
         vector = np.asarray(self._embedder.embed_query(question), dtype=np.float32)
         return self._store.search(vector, k=k, floor=floor)
+
+    def _embed_document(self, text: str) -> np.ndarray:
+        embedder = get_embedder(task_type="RETRIEVAL_DOCUMENT", settings=self._settings)
+        return np.asarray(embedder.embed_documents([text])[0], dtype=np.float32)
+
+    def max_document_similarity(self, text: str) -> float:
+        """Highest cosine similarity of ``text`` to any stored Trio (0 if empty).
+
+        Embeds ``text`` as a *document* (same task type as the stored Trios) so an
+        identical question scores ~1.0 — the right signal for the learning loop's
+        deduplication gate (a query-type embedding of identical text only scores ~0.9).
+        """
+        if len(self._store) == 0:
+            return 0.0
+        hits = self._store.search(self._embed_document(text), k=1, floor=0.0)
+        return hits[0].score if hits else 0.0
+
+    def add_trio(self, trio: Trio) -> None:
+        """Embed and append a Trio to the in-memory store (immediately retrievable)."""
+        self._store.add(trio, self._embed_document(trio.embedding_text))

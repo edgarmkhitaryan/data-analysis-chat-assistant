@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     golden_trios_dir: str = Field("data/golden_trios", alias="GOLDEN_TRIOS_DIR")
     golden_index_dir: str = Field("data/golden_index", alias="GOLDEN_INDEX_DIR")
 
+    # --- Learning loop (automatic Trio promotion: metrics + dedup + LLM-judge) ---
+    learning_loop_enabled: bool = Field(True, alias="LEARNING_LOOP_ENABLED")
+    learning_dedup_similarity: float = Field(0.93, alias="LEARNING_DEDUP_SIMILARITY")
+    learning_faithfulness_bar: int = Field(4, alias="LEARNING_FAITHFULNESS_BAR")
+
     # --- Identity & persona ---
     default_persona: str = Field("concise_exec", alias="DEFAULT_PERSONA")
     default_user: str = Field("manager_a", alias="DEFAULT_USER")
