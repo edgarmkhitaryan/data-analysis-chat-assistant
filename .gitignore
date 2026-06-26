@@ -33,4 +33,6 @@ logs/
 traces/
 data/*.db
 data/golden_index/
+# runtime-learned Trios from the learning loop (seed Trios stay tracked)
+data/golden_trios/learned_*.json
 *.sqlite

@@ -161,6 +161,10 @@ def _run_turn(
         "run_id": run_id,
         "sql_attempts": 0,
         "last_error": None,
+        # Reset analysis outputs so a non-analysis turn (preference/reports/reject)
+        # never re-renders the previous turn's SQL/rows held in the checkpoint.
+        "generated_sql": None,
+        "row_count": 0,
     }
     config = {"configurable": {"thread_id": thread_id}}
     with console.status("[dim]thinking…[/]", spinner="dots"):
