@@ -19,6 +19,7 @@ from assistant.agent.dependencies import AgentDeps
 from assistant.agent.nodes.common import as_text
 from assistant.agent.state import AgentState
 from assistant.llm import get_chat_model, resilient_invoke
+from assistant.safety.input_guard import injection_check
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,19 @@ def contextualize(state: AgentState, deps: AgentDeps) -> dict:
     raw_question = state.get("raw_question") or ""
     messages = state.get("messages", [])
     history = messages[:-1] if messages else []
+
+    # Deterministic injection pre-filter BEFORE any LLM call (plan/007 §1). This keeps the
+    # "we never feed flagged input to a model" guarantee true on *follow-up* turns too:
+    # a malicious follow-up is caught here (no rewrite LLM call) and passed straight to the
+    # guard — never routed to clarify, which would otherwise bypass the guard's filter.
+    if injection_check(raw_question):
+        logger.warning("safety: injection pattern in follow-up -> bypassing rewrite, routing to guard")
+        return {
+            "question": raw_question,
+            "history_used": False,
+            "needs_clarification": False,
+            "clarifying_question": None,
+        }
 
     # First turn / empty history: nothing to resolve against — passthrough, no LLM call.
     if not history:
