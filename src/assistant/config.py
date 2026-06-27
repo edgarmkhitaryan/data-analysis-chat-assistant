@@ -58,9 +58,17 @@ class Settings(BaseSettings):
 
     # --- Learning loop (automatic Trio promotion: metrics + dedup + LLM-judge) ---
     learning_loop_enabled: bool = Field(True, alias="LEARNING_LOOP_ENABLED")
-    learning_dedup_similarity: float = Field(0.93, alias="LEARNING_DEDUP_SIMILARITY")
+    # High novelty floor: in-domain retail questions share a high baseline embedding
+    # similarity, so a lower threshold wrongly discards genuinely distinct analyses as
+    # "near-duplicates". Only near-identical questions (>=0.97) are deduped; quality is
+    # enforced by the (data-grounded) LLM judge, not this coarse novelty gate.
+    learning_dedup_similarity: float = Field(0.97, alias="LEARNING_DEDUP_SIMILARITY")
     learning_faithfulness_bar: int = Field(4, alias="LEARNING_FAITHFULNESS_BAR")
     learning_intent_bar: int = Field(4, alias="LEARNING_INTENT_BAR")
+    # Max self-correction attempts a turn may have used and still be "clean" enough to
+    # learn from (an exemplar should have needed little correction). Config-driven so it
+    # tracks MAX_SQL_ATTEMPTS rather than being hardcoded.
+    learning_max_attempts: int = Field(2, alias="LEARNING_MAX_ATTEMPTS")
 
     # --- Identity & persona ---
     default_persona: str = Field("concise_exec", alias="DEFAULT_PERSONA")

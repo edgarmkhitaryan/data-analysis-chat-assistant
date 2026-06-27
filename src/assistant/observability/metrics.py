@@ -71,7 +71,11 @@ class Metrics:
     def summary(self) -> str:
         if not self.turns:
             return "No turns recorded yet."
-        success_rate = 100 * self.success / self.turns
+        # Success rate is over *completed analyses* (success + degraded) — not all turns:
+        # a rejected greeting or a preference update can never be a "success" and would
+        # otherwise understate how often the analysis pipeline actually answers.
+        analyses = self.success + self.degraded
+        success_rate = 100 * self.success / analyses if analyses else 0.0
         avg_attempts = self.total_attempts / self.attempt_turns if self.attempt_turns else 0.0
         avg_ms = self.total_ms / self.turns
         return "\n".join(
@@ -79,7 +83,7 @@ class Metrics:
                 f"Turns: {self.turns}  by intent: {dict(self.by_intent)}",
                 f"Success: {self.success}  Degraded: {self.degraded}  "
                 f"Clarify: {self.clarified}  Rejected: {self.rejected}  "
-                f"(success rate {success_rate:.0f}%)",
+                f"(analysis success rate {success_rate:.0f}%)",
                 f"Self-corrections: {self.self_corrections}  avg attempts/query: {avg_attempts:.2f}  "
                 f"empty results: {self.empty_results}  cold retrievals: {self.cold_retrievals}",
                 f"PII masked cells: {self.pii_masked}  pii_leak_prevented: {self.pii_leak_prevented}",

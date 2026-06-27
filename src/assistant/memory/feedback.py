@@ -135,7 +135,7 @@ def promote_if_qualified(candidate: Candidate, deps, judge_fn=judge_report) -> G
     settings = deps.settings
 
     # Stage 1 — deterministic metrics (no LLM, no embeddings).
-    metrics = _check_metrics(candidate, max_attempts=2)
+    metrics = _check_metrics(candidate, max_attempts=settings.learning_max_attempts)
     if not metrics.approved:
         logger.info("learning: discard %s — %s", candidate.run_id, "; ".join(metrics.reasons))
         return metrics
