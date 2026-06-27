@@ -91,6 +91,7 @@ from assistant.agent.nodes.synthesize import synthesize
 from assistant.agent.nodes.update_prefs import update_prefs
 from assistant.agent.nodes.validate_sql import validate_sql
 from assistant.agent.state import AgentState
+from assistant.observability import get_tracer, summarize_delta
 
 # Our typed state values (pydantic) must be explicitly allow-listed for the
 # checkpointer's msgpack (de)serialization — otherwise LangGraph warns on every
@@ -104,6 +105,25 @@ _ALLOWED_STATE_TYPES = {
 
 def _state_serde() -> JsonPlusSerializer:
     return JsonPlusSerializer(allowed_msgpack_modules=_ALLOWED_STATE_TYPES)
+
+
+def _traced(name: str, fn):
+    """Wrap an outer-graph node so it records a trace step from its returned delta.
+
+    The analysis subgraph is traced separately by streaming inside ``run_compound``;
+    the outer nodes (contextualize/guard/route/decompose/synthesize) are ``invoke``d, so
+    we record their step here. ``summarize_delta`` whitelists only trace-safe fields, so
+    no row data ever reaches the trace (the same guarantee as the inner nodes).
+    """
+
+    def wrapped(state: AgentState) -> dict:
+        delta = fn(state)
+        tracer = get_tracer()
+        if tracer is not None:
+            tracer.event(name, **(summarize_delta(name, delta) if isinstance(delta, dict) else {}))
+        return delta
+
+    return wrapped
 
 
 def _after_contextualize(state: AgentState) -> str:
@@ -215,22 +235,31 @@ def build_graph(
     pipeline = build_analysis_pipeline(deps)
 
     builder = StateGraph(AgentState)
-    builder.add_node("contextualize", lambda state: contextualize(state, deps))
-    builder.add_node("clarify", clarify)
-    builder.add_node("guard_input", lambda state: guard_input(state, deps))
-    builder.add_node("respond_reject", respond_reject)
-    builder.add_node("load_context", lambda state: load_context(state, deps))
-    builder.add_node("update_prefs", lambda state: update_prefs(state, deps))
-    builder.add_node("parse_report_command", lambda state: parse_report_command(state, deps))
-    builder.add_node("save_report", lambda state: save_report(state, deps))
-    builder.add_node("list_reports", lambda state: list_reports(state, deps))
-    builder.add_node("view_report", lambda state: view_report(state, deps))
-    builder.add_node("resolve_targets", lambda state: resolve_targets(state, deps))
-    builder.add_node("respond_none", respond_none)
+    # Outer nodes are wrapped with _traced so each records a step in the run trace
+    # (plan/009 §2). run_compound is left unwrapped — it streams the analysis subgraph's
+    # own per-node events — and confirm_delete is left unwrapped to keep the interrupt
+    # path untouched.
+    builder.add_node("contextualize", _traced("contextualize", lambda state: contextualize(state, deps)))
+    builder.add_node("clarify", _traced("clarify", clarify))
+    builder.add_node("guard_input", _traced("guard_input", lambda state: guard_input(state, deps)))
+    builder.add_node("respond_reject", _traced("respond_reject", respond_reject))
+    builder.add_node("load_context", _traced("load_context", lambda state: load_context(state, deps)))
+    builder.add_node("update_prefs", _traced("update_prefs", lambda state: update_prefs(state, deps)))
+    builder.add_node(
+        "parse_report_command",
+        _traced("parse_report_command", lambda state: parse_report_command(state, deps)),
+    )
+    builder.add_node("save_report", _traced("save_report", lambda state: save_report(state, deps)))
+    builder.add_node("list_reports", _traced("list_reports", lambda state: list_reports(state, deps)))
+    builder.add_node("view_report", _traced("view_report", lambda state: view_report(state, deps)))
+    builder.add_node(
+        "resolve_targets", _traced("resolve_targets", lambda state: resolve_targets(state, deps))
+    )
+    builder.add_node("respond_none", _traced("respond_none", respond_none))
     builder.add_node("confirm_delete", lambda state: confirm_delete(state, deps))
-    builder.add_node("decompose", lambda state: decompose(state, deps))
+    builder.add_node("decompose", _traced("decompose", lambda state: decompose(state, deps)))
     builder.add_node("run_compound", lambda state: run_compound(state, pipeline))
-    builder.add_node("synthesize", lambda state: synthesize(state, deps))
+    builder.add_node("synthesize", _traced("synthesize", lambda state: synthesize(state, deps)))
 
     builder.add_edge(START, "contextualize")
     builder.add_conditional_edges(

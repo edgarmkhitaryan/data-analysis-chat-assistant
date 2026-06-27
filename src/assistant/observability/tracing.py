@@ -30,6 +30,21 @@ _current: contextvars.ContextVar[Tracer | None] = contextvars.ContextVar(
 # Per-node whitelist of trace-safe fields extracted from a node's state delta.
 # Deliberately omits raw_rows / masked_rows so row data never reaches a trace.
 _NODE_FIELDS: dict[str, Any] = {
+    # Outer-graph nodes (contextualize -> guard -> route -> decompose -> synthesize).
+    "contextualize": lambda d: {
+        "rewritten": d.get("question"),
+        "history_used": d.get("history_used"),
+        "clarify": d.get("needs_clarification"),
+    },
+    "guard_input": lambda d: {"intent": d.get("intent")},
+    "update_prefs": lambda d: {"also_analysis": d.get("also_analysis")},
+    "decompose": lambda d: {
+        "is_compound": d.get("is_compound"),
+        "sub_questions": len(d.get("sub_questions") or []) or None,
+    },
+    # synthesize's delta now carries masked_rows — extract ONLY the report size, never rows.
+    "synthesize": lambda d: {"report_chars": len(d.get("report") or "") or None},
+    # Analysis subgraph nodes (streamed from run_compound).
     "retrieve_golden": lambda d: {
         "trio_ids": [t.id for t in (d.get("retrieved_trios") or [])],
         "cold": d.get("retrieval_cold"),
