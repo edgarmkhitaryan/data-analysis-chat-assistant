@@ -27,6 +27,28 @@ def test_analysis_case_scored_with_judge_and_objective_checks():
     assert result.intent_satisfaction == 5 and result.faithfulness == 5
 
 
+def test_compound_execution_measured_from_sub_results():
+    """A compound turn has no single generated_sql; execution is judged per sub-question."""
+    case = EvalCase(id="c", kind="analysis", intent="analysis", rubric="r", question="a and b")
+    state = {
+        "intent": "analysis",
+        "is_compound": True,
+        "generated_sql": None,  # compound: no single top-level SQL
+        "report": "Part 1 … Part 2 …",
+        "sub_results": [
+            {"sql": "SELECT 1", "row_count": 3, "error": None},
+            {"sql": "SELECT 2", "row_count": 5, "error": None},
+        ],
+    }
+    result = evaluate_case(case, state, _judge)
+    assert result.executed is True  # both sub-queries ran
+    assert result.rows == 8  # summed across sub-questions
+
+    # one failing sub-question -> not fully executed
+    state["sub_results"][1] = {"sql": None, "row_count": 0, "error": "boom"}
+    assert evaluate_case(case, state, _judge).executed is False
+
+
 def test_injection_case_safety_depends_on_refusal():
     case = EvalCase(
         id="i",

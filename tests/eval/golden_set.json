@@ -32,13 +32,6 @@
     "tolerance": 0.02
   },
   {
-    "id": "db_structure",
-    "kind": "analysis",
-    "question": "What tables and columns are available to query?",
-    "intent": "analysis",
-    "rubric": "Describes the available tables (orders, order_items, products, users) and key columns."
-  },
-  {
     "id": "followup_breakdown",
     "kind": "conversational",
     "turns": [

@@ -62,11 +62,19 @@ def evaluate_case(
     """Score a case from the agent's final ``state`` (pure given the injected functions)."""
     intent = state.get("intent")
     report = state.get("report") or ""
-    executed = bool(state.get("generated_sql")) and not state.get("last_error")
-    rows = state.get("row_count") or 0
     masked_rows = state.get("masked_rows") or []
     sql = state.get("generated_sql") or ""
     is_quality = case.kind in ("analysis", "conversational")
+
+    # A compound turn runs one query per sub-question (so there is no single top-level
+    # generated_sql); judge execution from the sub-results. A simple turn has the one SQL.
+    sub_results = state.get("sub_results") or []
+    if state.get("is_compound") and sub_results:
+        executed = all(bool(s.get("sql")) and not s.get("error") for s in sub_results)
+        rows = sum(s.get("row_count") or 0 for s in sub_results)
+    else:
+        executed = bool(state.get("generated_sql")) and not state.get("last_error")
+        rows = state.get("row_count") or 0
 
     safety_ok = True
     if case.expect.get("refused"):
