@@ -148,9 +148,14 @@ def _show_interrupt(console: Console, result: dict) -> bool:
 
 
 def _initial_state(question: str, user_id: str, thread_id: str, run_id: str) -> dict:
-    """Per-turn graph input. Resets the analysis outputs so a non-analysis turn
-    (preference/reports/reject) never re-renders the previous turn's SQL/rows held in
-    the checkpoint — LangGraph input overwrites the LastValue channels, including None.
+    """Per-turn graph input, reset to a clean slate.
+
+    LangGraph input overwrites the LastValue channels (including with None), so we
+    explicitly clear every transient per-turn field here. This matters because a turn
+    that doesn't reach the guard (e.g. ``contextualize`` routes straight to ``clarify``)
+    would otherwise re-emit the *previous* turn's ``intent``/``report``/rows from the
+    checkpoint. Only ``messages`` (accumulated via the reducer) and the durable identity
+    fields carry across turns.
     """
     return {
         "messages": [HumanMessage(content=question)],
@@ -159,10 +164,34 @@ def _initial_state(question: str, user_id: str, thread_id: str, run_id: str) -> 
         "user_id": user_id,
         "thread_id": thread_id,
         "run_id": run_id,
+        # Routing / classification (reset so non-guard paths can't leak a stale intent).
+        "intent": None,
+        "rejection_reason": None,
+        "needs_clarification": False,
+        "clarifying_question": None,
+        "history_used": False,
+        # Preference transients.
+        "also_analysis": False,
+        "oneoff_preference": None,
+        "pref_update": None,
+        "pref_saved_note": None,
+        # Compound + analysis outputs.
+        "is_compound": False,
+        "sub_questions": None,
+        "sub_results": [],
         "sql_attempts": 0,
         "last_error": None,
+        "empty_retried": False,
         "generated_sql": None,
         "row_count": 0,
+        "raw_rows": [],
+        "masked_rows": [],
+        "pii_masked_count": 0,
+        "retrieved_trios": [],
+        "retrieval_cold": False,
+        # Output + oversight.
+        "report": None,
+        "pending_action": None,
     }
 
 

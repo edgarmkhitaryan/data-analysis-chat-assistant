@@ -55,6 +55,18 @@ def _succeeded(result: dict) -> bool:
     return bool(result.get("report")) and not result.get("error")
 
 
+def _collect_masked(results: list[dict]) -> dict:
+    """Lift the masked rows out of the sub-results so the parent turn can surface them.
+
+    These ground the eval/learning faithfulness judge and the reference cross-check
+    (plan/011 §2.1). Always masked rows, never raw — the union across the parts that
+    contributed to the report.
+    """
+    rows = [row for r in results for row in (r.get("masked_rows") or [])]
+    masked = sum(r.get("pii_masked_count") or 0 for r in results)
+    return {"masked_rows": rows, "pii_masked_count": masked}
+
+
 def synthesize(state: AgentState, deps: AgentDeps) -> dict:
     """Pass a single report through, or merge multiple sub-reports into one briefing."""
     sub_results = state.get("sub_results", [])
@@ -72,6 +84,7 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
             generated_sql=only.get("sql"),
             row_count=only.get("row_count", 0),
             last_error=only.get("error"),
+            **_collect_masked([only]),
         )
 
     # Compound question: merge the parts that succeeded.
@@ -83,7 +96,7 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
             "I wasn't able to answer any part of that question. "
             "Please try rephrasing or narrowing it."
         )
-        return _finalize(message, deps, prefix=saved_note)
+        return _finalize(message, deps, prefix=saved_note, **_collect_masked([]))
 
     parts = "\n\n".join(
         f"### Part {i}: {r['sub_question']}\n{r['report']}"
@@ -108,4 +121,6 @@ def synthesize(state: AgentState, deps: AgentDeps) -> dict:
         chat, [SystemMessage(content=system), HumanMessage(content=human)], settings=deps.settings
     )
     report = as_text(reply.content).strip()
-    return _finalize(report, deps, prefix=saved_note, generated_sql=None)
+    return _finalize(
+        report, deps, prefix=saved_note, generated_sql=None, **_collect_masked(successful)
+    )
