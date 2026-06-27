@@ -96,6 +96,35 @@ def test_rejects_wrong_dataset():
     assert "dataset" in result.error.lower()
 
 
+# --- INFORMATION_SCHEMA metadata (DB-structure questions) ---------------------
+
+
+def test_accepts_information_schema_columns_scoped_to_dataset():
+    result = validate_select(
+        f"SELECT table_name, column_name, data_type FROM `{DS}`.INFORMATION_SCHEMA.COLUMNS"
+    )
+    assert result.ok, result.error
+
+
+def test_accepts_information_schema_tables_unbackticked():
+    result = validate_select(f"SELECT table_name FROM {DS}.INFORMATION_SCHEMA.TABLES")
+    assert result.ok, result.error
+
+
+def test_rejects_information_schema_of_other_dataset():
+    result = validate_select(
+        "SELECT * FROM `bigquery-public-data.other_ds`.INFORMATION_SCHEMA.COLUMNS"
+    )
+    assert not result.ok
+    assert "dataset" in result.error.lower()
+
+
+def test_information_schema_is_still_read_only():
+    # The metadata exception must not become a DML/DDL loophole.
+    result = validate_select(f"DROP TABLE `{DS}`.INFORMATION_SCHEMA.COLUMNS")
+    assert not result.ok
+
+
 # --- LIMIT injection / clamp -------------------------------------------------
 
 

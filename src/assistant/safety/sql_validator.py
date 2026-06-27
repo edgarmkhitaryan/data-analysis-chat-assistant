@@ -9,6 +9,9 @@ before any query runs:
    SELECTs); any DML/DDL node anywhere in the tree is rejected.
 3. **Table allow-list** — every referenced table must be one of the four
    ``thelook_ecommerce`` tables in the configured dataset (CTE names are exempt).
+   Read-only ``INFORMATION_SCHEMA`` metadata views (column/table names + types) are
+   also allowed, but only when scoped to that same dataset — so database-structure
+   questions can be answered without ever exposing row data or PII.
 4. **Mandatory LIMIT** — a sane ``LIMIT`` is injected when absent and clamped when
    it exceeds the cap, protecting the CLI and cost.
 
@@ -113,6 +116,25 @@ def validate_select(
         name = (table.name or "").lower()
         if name in cte_names:
             continue  # a reference to a CTE, not a real table
+        # Read-only INFORMATION_SCHEMA metadata views (table/column names + types) let the
+        # agent answer database-structure questions (task.md). Allowed ONLY when scoped to
+        # the configured dataset — they expose schema metadata, never row data or PII.
+        if name.startswith("information_schema."):
+            if (table.db or "").lower() != (expected_db or "").lower():
+                return SqlValidation(
+                    ok=False,
+                    error="INFORMATION_SCHEMA queries must be scoped to dataset "
+                    f"'{expected_db}' (e.g. `{dataset}`.INFORMATION_SCHEMA.COLUMNS).",
+                )
+            if (
+                table.catalog
+                and expected_catalog
+                and table.catalog.lower() != expected_catalog.lower()
+            ):
+                return SqlValidation(
+                    ok=False, error=f"Table must be in project '{expected_catalog}'."
+                )
+            continue
         if name not in allowed_lower:
             allowed = ", ".join(sorted(allowed_tables))
             return SqlValidation(
