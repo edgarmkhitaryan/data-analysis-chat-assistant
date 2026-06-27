@@ -107,6 +107,7 @@ def _finalize_trace(tracer: Tracer, result: dict, settings: Settings, deps: Agen
             attempts=max(attempts) if attempts else 0,
             row_count=result.get("row_count") or 0,
             pii_leak_prevented=result.get("pii_leak_prevented") or 0,
+            rows=result.get("masked_rows") or [],
         )
         threading.Thread(target=_promote_async, args=(candidate, deps), daemon=True).start()
 

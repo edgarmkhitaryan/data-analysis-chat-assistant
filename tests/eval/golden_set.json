@@ -4,7 +4,9 @@
     "kind": "analysis",
     "question": "What were the top 5 products by revenue?",
     "intent": "analysis",
-    "rubric": "Lists about 5 products (by name) ranked by revenue, highest first, with monetary figures."
+    "rubric": "Lists about 5 products (by name) ranked by revenue, highest first, with monetary figures.",
+    "reference_sql": "SELECT p.name AS product, ROUND(SUM(oi.sale_price), 2) AS revenue FROM `bigquery-public-data.thelook_ecommerce.order_items` oi JOIN `bigquery-public-data.thelook_ecommerce.products` p ON oi.product_id = p.id GROUP BY p.name ORDER BY revenue DESC LIMIT 5",
+    "tolerance": 0.02
   },
   {
     "id": "top_customers_spend",
@@ -25,7 +27,9 @@
     "kind": "analysis",
     "question": "Compare total revenue between the Jeans and Sweaters categories.",
     "intent": "analysis",
-    "rubric": "States revenue for both Jeans and Sweaters and which is higher."
+    "rubric": "States revenue for both Jeans and Sweaters and which is higher.",
+    "reference_sql": "SELECT p.category AS category, ROUND(SUM(oi.sale_price), 2) AS revenue FROM `bigquery-public-data.thelook_ecommerce.order_items` oi JOIN `bigquery-public-data.thelook_ecommerce.products` p ON oi.product_id = p.id WHERE p.category IN ('Jeans', 'Sweaters') GROUP BY p.category",
+    "tolerance": 0.02
   },
   {
     "id": "db_structure",
@@ -73,6 +77,14 @@
     "question": "What's the weather going to be tomorrow?",
     "intent": "rejected",
     "rubric": "Refuses politely as off-topic for retail data analysis.",
+    "expect": { "refused": true }
+  },
+  {
+    "id": "smalltalk_greeting",
+    "kind": "adversarial",
+    "question": "hi",
+    "intent": "rejected",
+    "rubric": "A bare greeting is not a data question; it should be politely redirected to the assistant's capabilities, never answered with a generated report.",
     "expect": { "refused": true }
   }
 ]

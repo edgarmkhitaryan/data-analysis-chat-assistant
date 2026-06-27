@@ -34,10 +34,15 @@ def main() -> int:
     deps = AgentDeps.create(settings)
     graph = build_graph(deps=deps)
 
+    # Objective correctness cross-check: run a case's reference_sql on BigQuery and compare
+    # its aggregates to the agent's result (plan/011 §2). Only fires for cases that supply one.
+    def reference_fn(sql: str) -> list[dict]:
+        return deps.runner.execute_query(sql).rows
+
     results: list[CaseResult] = []
     for case in cases:
         try:
-            results.append(run_case(case, graph, judge_report, settings))
+            results.append(run_case(case, graph, judge_report, settings, reference_fn=reference_fn))
             console.print(f"  · {case.id} done")
         except Exception as exc:  # noqa: BLE001 — a failing case is data, not a crash
             console.print(f"  [red]· {case.id} errored: {exc}[/]")

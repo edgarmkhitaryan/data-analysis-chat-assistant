@@ -25,6 +25,10 @@ class EvalCase:
     question: str | None = None
     turns: list[str] | None = None
     expect: dict = field(default_factory=dict)
+    # Optional objective correctness cross-check: an authoritative query whose numeric
+    # aggregates must be reproduced in the agent's result (plan/011 §2 / eval.correctness).
+    reference_sql: str | None = None
+    tolerance: float = 0.01  # relative tolerance when matching reference aggregates
 
     @property
     def final_question(self) -> str:
@@ -46,6 +50,8 @@ def load_cases(path: str = DEFAULT_CASES_PATH) -> list[EvalCase]:
             question=case.get("question"),
             turns=case.get("turns"),
             expect=case.get("expect", {}),
+            reference_sql=case.get("reference_sql"),
+            tolerance=case.get("tolerance", 0.01),
         )
         for case in data
     ]

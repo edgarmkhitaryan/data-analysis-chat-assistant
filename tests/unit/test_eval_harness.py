@@ -10,7 +10,7 @@ from assistant.eval.cases import EvalCase
 from assistant.eval.harness import CaseResult, evaluate_case, summarize
 
 
-def _judge(question, report, rubric, settings=None):
+def _judge(question, report, rubric, settings=None, **kwargs):
     return SimpleNamespace(intent_satisfaction=5, faithfulness=5, justification="good")
 
 
@@ -80,6 +80,80 @@ def test_adversarial_case_does_not_call_judge():
 
     result = evaluate_case(case, {"intent": "rejected", "report": "no"}, _boom)
     assert result.intent_satisfaction is None
+
+
+def test_judge_receives_masked_rows_and_sql():
+    """Faithfulness must be judged against the data — the harness feeds rows + SQL through."""
+    seen = {}
+
+    def _capturing_judge(question, report, rubric, settings=None, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(intent_satisfaction=4, faithfulness=4, justification="ok")
+
+    case = EvalCase(id="t", kind="analysis", intent="analysis", rubric="r", question="q")
+    state = {
+        "intent": "analysis",
+        "generated_sql": "SELECT name, revenue FROM t",
+        "row_count": 2,
+        "masked_rows": [{"name": "A", "revenue": 100.0}, {"name": "B", "revenue": 50.0}],
+        "report": "A leads with $100.",
+    }
+    evaluate_case(case, state, _capturing_judge)
+    assert seen["sql"] == "SELECT name, revenue FROM t"
+    assert seen["data"] == state["masked_rows"]
+
+
+def test_reference_check_pass_and_mismatch():
+    """A reference_sql turns into an objective aggregate cross-check on the agent's rows."""
+    case = EvalCase(
+        id="t",
+        kind="analysis",
+        intent="analysis",
+        rubric="r",
+        question="q",
+        reference_sql="SELECT 1",
+    )
+    state = {
+        "intent": "analysis",
+        "generated_sql": "x",
+        "row_count": 2,
+        "masked_rows": [{"cat": "Jeans", "revenue": 1000.0}, {"cat": "Sweaters", "revenue": 800.0}],
+        "report": "Jeans 1000, Sweaters 800.",
+    }
+
+    def _ref_match(_sql):
+        return [{"category": "Jeans", "revenue": 1000.0}, {"category": "Sweaters", "revenue": 800.0}]
+
+    def _ref_mismatch(_sql):
+        return [{"category": "Jeans", "revenue": 2500.0}, {"category": "Sweaters", "revenue": 800.0}]
+
+    ok = evaluate_case(case, state, _judge, reference_fn=_ref_match)
+    assert ok.reference_attempted and ok.reference_ran and ok.reference_ok is True
+
+    bad = evaluate_case(case, state, _judge, reference_fn=_ref_mismatch)
+    assert bad.reference_ran and bad.reference_ok is False
+
+
+def test_reference_error_is_not_fatal():
+    """A broken reference query is recorded as data (ran=False), never a harness crash."""
+    case = EvalCase(
+        id="t", kind="analysis", intent="analysis", rubric="r", question="q", reference_sql="bad"
+    )
+    state = {"intent": "analysis", "generated_sql": "x", "row_count": 1, "masked_rows": [{"a": 1.0}]}
+
+    def _boom(_sql):
+        raise RuntimeError("syntax error")
+
+    result = evaluate_case(case, state, _judge, reference_fn=_boom)
+    assert result.reference_attempted and not result.reference_ran and result.reference_ok is None
+
+
+def test_no_reference_when_case_has_none():
+    """Cases without a reference_sql skip the cross-check entirely."""
+    case = EvalCase(id="t", kind="analysis", intent="analysis", rubric="r", question="q")
+    state = {"intent": "analysis", "generated_sql": "x", "row_count": 1, "masked_rows": [{"a": 1.0}]}
+    result = evaluate_case(case, state, _judge, reference_fn=lambda s: [{"a": 1.0}])
+    assert not result.reference_attempted and result.reference_ok is None
 
 
 def test_summarize_pass_and_fail():

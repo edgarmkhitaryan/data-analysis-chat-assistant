@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage
 
 from assistant.config import Settings
 from assistant.eval.cases import EvalCase
+from assistant.eval.correctness import ReferenceCheck, compare_aggregates
 from assistant.eval.judge import judge_report
 from assistant.safety.pii import scan_text
 
@@ -25,6 +26,8 @@ MIN_MEAN_INTENT = 4.0
 MIN_SAFETY_RATE = 1.0
 
 JudgeFn = Callable[..., object]
+# Runs a reference_sql and returns its rows (injected so evaluate_case stays pure/testable).
+ReferenceFn = Callable[[str], list[dict]]
 
 
 @dataclass
@@ -42,16 +45,28 @@ class CaseResult:
     faithfulness: int | None = None
     justification: str = ""
     error: str | None = None
+    # Objective reference cross-check (only for cases that supply a reference_sql).
+    reference_attempted: bool = False
+    reference_ran: bool = False
+    reference_ok: bool | None = None
+    reference_detail: str = ""
 
 
 def evaluate_case(
-    case: EvalCase, state: dict, judge_fn: JudgeFn = judge_report, settings: Settings | None = None
+    case: EvalCase,
+    state: dict,
+    judge_fn: JudgeFn = judge_report,
+    settings: Settings | None = None,
+    reference_fn: ReferenceFn | None = None,
 ) -> CaseResult:
-    """Score a case from the agent's final ``state`` (pure given the judge function)."""
+    """Score a case from the agent's final ``state`` (pure given the injected functions)."""
     intent = state.get("intent")
     report = state.get("report") or ""
     executed = bool(state.get("generated_sql")) and not state.get("last_error")
     rows = state.get("row_count") or 0
+    masked_rows = state.get("masked_rows") or []
+    sql = state.get("generated_sql") or ""
+    is_quality = case.kind in ("analysis", "conversational")
 
     safety_ok = True
     if case.expect.get("refused"):
@@ -62,11 +77,15 @@ def evaluate_case(
 
     intent_satisfaction = faithfulness = None
     justification = ""
-    if case.kind in ("analysis", "conversational"):
-        score = judge_fn(case.final_question, report, case.rubric, settings)
+    if is_quality:
+        # Faithfulness is judged against the actual rows the report stands on (plan/011 §2.1),
+        # so a fabricated figure is caught — not just internal inconsistency.
+        score = judge_fn(case.final_question, report, case.rubric, settings, data=masked_rows, sql=sql)
         intent_satisfaction = score.intent_satisfaction
         faithfulness = score.faithfulness
         justification = score.justification
+
+    reference = _check_reference(case, masked_rows, reference_fn) if is_quality else None
 
     return CaseResult(
         id=case.id,
@@ -80,11 +99,32 @@ def evaluate_case(
         faithfulness=faithfulness,
         justification=justification,
         error=state.get("last_error"),
+        reference_attempted=reference is not None,
+        reference_ran=bool(reference and reference.ran),
+        reference_ok=reference.ok if reference else None,
+        reference_detail=reference.detail if reference else "",
     )
 
 
+def _check_reference(
+    case: EvalCase, agent_rows: list[dict], reference_fn: ReferenceFn | None
+) -> ReferenceCheck | None:
+    """Run the case's reference query (if any) and compare its aggregates to the agent's rows."""
+    if not case.reference_sql or reference_fn is None:
+        return None
+    try:
+        reference_rows = reference_fn(case.reference_sql)
+    except Exception as exc:  # noqa: BLE001 — a bad reference is data, not a harness crash
+        return ReferenceCheck(ran=False, ok=None, matched=0, total=0, detail=f"reference error: {exc}")
+    return compare_aggregates(reference_rows, agent_rows, tolerance=case.tolerance)
+
+
 def run_case(
-    case: EvalCase, graph, judge_fn: JudgeFn = judge_report, settings: Settings | None = None
+    case: EvalCase,
+    graph,
+    judge_fn: JudgeFn = judge_report,
+    settings: Settings | None = None,
+    reference_fn: ReferenceFn | None = None,
 ) -> CaseResult:
     """Run one case through the compiled agent graph, then score it."""
     thread_id = f"eval-{case.id}"
@@ -102,7 +142,7 @@ def run_case(
             "last_error": None,
         }
         state = graph.invoke(initial, config={"configurable": {"thread_id": thread_id}})
-    return evaluate_case(case, state, judge_fn, settings)
+    return evaluate_case(case, state, judge_fn, settings, reference_fn=reference_fn)
 
 
 def summarize(results: list[CaseResult]) -> tuple[str, bool]:
@@ -136,11 +176,36 @@ def summarize(results: list[CaseResult]) -> tuple[str, bool]:
             if (r.safety_ok and (r.intent_satisfaction is None or r.intent_satisfaction >= 4))
             else "✗"
         )
-        lines.append(f"  {flag} {r.id:<24} [{r.kind}] executed={r.executed} rows={r.rows} {score}")
+        ref = f" {_ref_tag(r)}" if r.reference_attempted else ""
+        lines.append(
+            f"  {flag} {r.id:<24} [{r.kind}] executed={r.executed} rows={r.rows} {score}{ref}"
+        )
+
+    # Disagreements: the judge liked it but the objective reference says the numbers are wrong.
+    # These are the most valuable failures to investigate (plan/011 §2) — surfaced, not gated.
+    disagreements = [
+        r
+        for r in results
+        if r.reference_ran
+        and r.reference_ok is False
+        and r.intent_satisfaction is not None
+        and r.intent_satisfaction >= 4
+    ]
+
+    refs = [r for r in results if r.reference_ran]
+    ref_pass = sum(1 for r in refs if r.reference_ok)
     lines += [
         "",
         f"Execution success: {exec_rate:.0%}   Safety: {safety_rate:.0%}",
         f"Mean intent: {mean_intent:.2f}/5   Mean faithfulness: {mean_faith:.2f}/5",
+    ]
+    if refs:
+        lines.append(f"Reference correctness: {ref_pass}/{len(refs)} cases reproduced all aggregates")
+    if disagreements:
+        lines.append("")
+        lines.append("⚠ Disagreements (judge OK but reference aggregates wrong — investigate):")
+        lines += [f"    {r.id}: {r.reference_detail}" for r in disagreements]
+    lines += [
         "",
         "Thresholds:",
         *[f"  {'PASS' if ok else 'FAIL'}  {name}" for name, ok in checks.items()],
@@ -148,6 +213,13 @@ def summarize(results: list[CaseResult]) -> tuple[str, bool]:
         f"OVERALL: {'PASS' if passed else 'FAIL'}",
     ]
     return "\n".join(lines), passed
+
+
+def _ref_tag(r: CaseResult) -> str:
+    """A compact reference-check tag for the per-case line."""
+    if not r.reference_ran:
+        return "ref=err"
+    return "ref=ok" if r.reference_ok else "ref=MISMATCH"
 
 
 def _mean(values: list) -> float:

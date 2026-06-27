@@ -45,6 +45,9 @@ class Candidate:
     attempts: int
     row_count: int
     pii_leak_prevented: int
+    # The PII-masked rows the report stood on, so the judge can ground faithfulness in the
+    # actual data (not just internal consistency). Defaults empty for back-compat.
+    rows: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -146,8 +149,16 @@ def promote_if_qualified(candidate: Candidate, deps, judge_fn=judge_report) -> G
         return GateResult(False, [reason])
 
     # Stage 3 — LLM-as-judge: must clear BOTH faithfulness AND intent-satisfaction
-    # (a faithful but incomplete answer must not be learned).
-    score = judge_fn(candidate.question, candidate.report, _LEARNING_RUBRIC, settings)
+    # (a faithful but incomplete answer must not be learned). Faithfulness is grounded in
+    # the actual masked rows the report stood on, so a fabricated figure is caught.
+    score = judge_fn(
+        candidate.question,
+        candidate.report,
+        _LEARNING_RUBRIC,
+        settings,
+        data=candidate.rows,
+        sql=candidate.sql,
+    )
     if score.faithfulness < settings.learning_faithfulness_bar:
         reason = f"faithfulness {score.faithfulness} below bar {settings.learning_faithfulness_bar}"
         logger.info("learning: discard %s — %s", candidate.run_id, reason)
