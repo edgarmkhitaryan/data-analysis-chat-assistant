@@ -235,10 +235,8 @@ def build_graph(
     pipeline = build_analysis_pipeline(deps)
 
     builder = StateGraph(AgentState)
-    # Outer nodes are wrapped with _traced so each records a step in the run trace
-    # (plan/009 §2). run_compound is left unwrapped — it streams the analysis subgraph's
-    # own per-node events — and confirm_delete is left unwrapped to keep the interrupt
-    # path untouched.
+    # Outer nodes are wrapped with _traced to record a trace step (plan/009 §2). run_compound
+    # (streams its own sub-events) and confirm_delete (interrupt path) stay unwrapped.
     builder.add_node("contextualize", _traced("contextualize", lambda state: contextualize(state, deps)))
     builder.add_node("clarify", _traced("clarify", clarify))
     builder.add_node("guard_input", _traced("guard_input", lambda state: guard_input(state, deps)))

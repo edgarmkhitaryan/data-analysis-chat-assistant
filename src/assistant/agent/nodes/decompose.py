@@ -94,9 +94,7 @@ def run_compound(state: AgentState, pipeline) -> dict:
     persona = state.get("persona")
     user_prefs = state.get("user_prefs")
     user_id = state.get("user_id")
-    # A one-off preference ("...as bullets just this once") applies to this turn's report.
-    # It must be passed into the subgraph so the per-question report node honors it on the
-    # common single-question path (the compound merge already runs at the top level).
+    # Pass the one-off preference into the subgraph so the single-question report honors it.
     oneoff_preference = state.get("oneoff_preference")
     tracer = get_tracer()
     is_compound = bool(state.get("is_compound"))

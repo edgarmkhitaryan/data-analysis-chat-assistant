@@ -71,9 +71,8 @@ class Metrics:
     def summary(self) -> str:
         if not self.turns:
             return "No turns recorded yet."
-        # Success rate is over *completed analyses* (success + degraded) — not all turns:
-        # a rejected greeting or a preference update can never be a "success" and would
-        # otherwise understate how often the analysis pipeline actually answers.
+        # Success rate is over completed analyses (success + degraded), not all turns —
+        # rejected/preference/report turns aren't failed analyses.
         analyses = self.success + self.degraded
         success_rate = 100 * self.success / analyses if analyses else 0.0
         avg_attempts = self.total_attempts / self.attempt_turns if self.attempt_turns else 0.0

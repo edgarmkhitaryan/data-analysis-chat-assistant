@@ -116,9 +116,8 @@ def validate_select(
         name = (table.name or "").lower()
         if name in cte_names:
             continue  # a reference to a CTE, not a real table
-        # Read-only INFORMATION_SCHEMA metadata views (table/column names + types) let the
-        # agent answer database-structure questions (task.md). Allowed ONLY when scoped to
-        # the configured dataset — they expose schema metadata, never row data or PII.
+        # Read-only INFORMATION_SCHEMA metadata views, scoped to our dataset, so DB-structure
+        # questions are answerable without exposing row data or PII (task.md).
         if name.startswith("information_schema."):
             if (table.db or "").lower() != (expected_db or "").lower():
                 return SqlValidation(

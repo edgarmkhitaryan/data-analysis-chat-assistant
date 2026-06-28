@@ -72,10 +72,8 @@ def contextualize(state: AgentState, deps: AgentDeps) -> dict:
     messages = state.get("messages", [])
     history = messages[:-1] if messages else []
 
-    # Deterministic injection pre-filter BEFORE any LLM call (plan/007 §1). This keeps the
-    # "we never feed flagged input to a model" guarantee true on *follow-up* turns too:
-    # a malicious follow-up is caught here (no rewrite LLM call) and passed straight to the
-    # guard — never routed to clarify, which would otherwise bypass the guard's filter.
+    # Deterministic injection filter before any LLM call (plan/007 §1): a malicious follow-up
+    # is caught here and routed to the guard, never to clarify (which would skip the filter).
     if injection_check(raw_question):
         logger.warning("safety: injection pattern in follow-up -> bypassing rewrite, routing to guard")
         return {

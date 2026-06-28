@@ -35,9 +35,7 @@ class Settings(BaseSettings):
 
     # --- Models ---
     llm_model: str = Field("gemini-3.1-flash-lite", alias="LLM_MODEL")
-    # Cheaper/faster model for low-stakes structured calls (intent guard, contextualize,
-    # decompose, preference merge, report-command parse) — reserves the main model for
-    # quality-critical SQL/report generation, and spreads free-tier rate-limit load.
+    # Cheaper model for low-stakes structured calls; main model handles SQL/report gen.
     llm_model_cheap: str = Field("gemini-2.5-flash-lite", alias="LLM_MODEL_CHEAP")
     embedding_model: str = Field("models/gemini-embedding-001", alias="EMBEDDING_MODEL")
 
@@ -61,16 +59,11 @@ class Settings(BaseSettings):
 
     # --- Learning loop (automatic Trio promotion: metrics + dedup + LLM-judge) ---
     learning_loop_enabled: bool = Field(True, alias="LEARNING_LOOP_ENABLED")
-    # High novelty floor: in-domain retail questions share a high baseline embedding
-    # similarity, so a lower threshold wrongly discards genuinely distinct analyses as
-    # "near-duplicates". Only near-identical questions (>=0.97) are deduped; quality is
-    # enforced by the (data-grounded) LLM judge, not this coarse novelty gate.
+    # High floor: in-domain questions are very similar, so only near-identical ones dedupe.
     learning_dedup_similarity: float = Field(0.97, alias="LEARNING_DEDUP_SIMILARITY")
     learning_faithfulness_bar: int = Field(4, alias="LEARNING_FAITHFULNESS_BAR")
     learning_intent_bar: int = Field(4, alias="LEARNING_INTENT_BAR")
-    # Max self-correction attempts a turn may have used and still be "clean" enough to
-    # learn from (an exemplar should have needed little correction). Config-driven so it
-    # tracks MAX_SQL_ATTEMPTS rather than being hardcoded.
+    # Max self-corrections a turn may have used and still be learnable.
     learning_max_attempts: int = Field(2, alias="LEARNING_MAX_ATTEMPTS")
 
     # --- Identity & persona ---

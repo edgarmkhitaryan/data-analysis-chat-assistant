@@ -26,9 +26,7 @@ class SubResult(TypedDict, total=False):
     report: str | None
     row_count: int
     error: str | None
-    # The PII-masked rows the sub-report stood on, lifted out of the (checkpointer-less)
-    # analysis subgraph so the parent turn can surface them (grounds the eval/learning judge
-    # and the reference cross-check, plan/011 §2.1). Never raw_rows — masked only.
+    # Masked rows the sub-report stood on, surfaced to the parent turn to ground the judge.
     masked_rows: list[dict]
     pii_masked_count: int
 
