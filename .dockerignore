@@ -1,0 +1,34 @@
+# Keep the build context small and never bake secrets or host state into the image.
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Python / virtualenv / caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Runtime-generated, host-specific state (regenerated inside the container)
+data/app.db
+data/golden_index/
+data/golden_trios/learned_*.json
+logs/
+traces/
+
+# VCS, IDE, agent, and design docs (not needed at runtime)
+.git/
+.gitignore
+.idea/
+.vscode/
+.claude/
+plan/
+task.md
+tests/
