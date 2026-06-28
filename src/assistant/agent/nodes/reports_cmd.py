@@ -71,7 +71,7 @@ _PARSE_SYSTEM = (
 def parse_report_command(state: AgentState, deps: AgentDeps) -> dict:
     """Classify the saved-reports command and extract any delete filters."""
     question = state.get("question", "")
-    chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    chat = get_chat_model(temperature=0.0, settings=deps.settings, cheap=True)
     try:
         cmd: ReportCommand = resilient_invoke(
             chat.with_structured_output(ReportCommand),

@@ -2,8 +2,10 @@
 
 Centralizing model construction here means model choice, credentials, and retry
 policy are configured in exactly one place. Nodes ask for ``get_chat_model()``
-(fast default) or ``get_chat_model(heavy=True)`` (the escalation model for hard
-reasoning) and never touch credentials or provider details.
+(main model, ``LLM_MODEL``, for quality-critical SQL/report generation) or
+``get_chat_model(cheap=True)`` (a cheaper/faster model, ``LLM_MODEL_CHEAP``, for
+low-stakes structured calls like intent classification) and never touch credentials
+or provider details.
 
 LLM calls go through :func:`resilient_invoke`, which adds tenacity backoff + a
 shared circuit breaker (plan/008 §3). The model's own built-in retry is therefore
@@ -27,21 +29,22 @@ _llm_breaker: CircuitBreaker | None = None
 
 def get_chat_model(
     *,
-    heavy: bool = False,
+    cheap: bool = False,
     temperature: float = 0.0,
     settings: Settings | None = None,
 ) -> ChatGoogleGenerativeAI:
     """Return a configured Gemini chat model.
 
     Args:
-        heavy: Use the heavier escalation model (``LLM_MODEL_HEAVY``) instead of
-            the fast default (``LLM_MODEL``).
+        cheap: Use the cheaper/faster model (``LLM_MODEL_CHEAP``) for low-stakes
+            structured calls. Reserves the main model (``LLM_MODEL``) for
+            quality-critical generation and spreads free-tier rate-limit load.
         temperature: Sampling temperature; defaults to 0.0 for deterministic
             SQL/report generation.
         settings: Optional settings override (mainly for tests).
     """
     settings = settings or get_settings()
-    model_name = settings.llm_model_heavy if heavy else settings.llm_model
+    model_name = settings.llm_model_cheap if cheap else settings.llm_model
     return ChatGoogleGenerativeAI(
         model=model_name,
         google_api_key=settings.gemini_api_key.get_secret_value(),

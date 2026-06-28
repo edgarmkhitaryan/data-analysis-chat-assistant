@@ -126,7 +126,7 @@ def guard_input(state: AgentState, deps: AgentDeps) -> dict:
         return {**_base_reset(), "intent": "rejected", "rejection_reason": hit}
 
     # 2) LLM classification for everything else.
-    chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    chat = get_chat_model(temperature=0.0, settings=deps.settings, cheap=True)
     try:
         decision: IntentDecision = resilient_invoke(
             chat.with_structured_output(IntentDecision),

@@ -94,7 +94,7 @@ def contextualize(state: AgentState, deps: AgentDeps) -> dict:
             "clarifying_question": None,
         }
 
-    chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    chat = get_chat_model(temperature=0.0, settings=deps.settings, cheap=True)
     system = _SYSTEM.format(today=date.today().isoformat())
     human = (
         f"Conversation so far:\n{_format_history(history, deps.settings.max_history_messages)}\n\n"

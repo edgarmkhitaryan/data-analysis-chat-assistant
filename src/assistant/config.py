@@ -35,7 +35,10 @@ class Settings(BaseSettings):
 
     # --- Models ---
     llm_model: str = Field("gemini-3.1-flash-lite", alias="LLM_MODEL")
-    llm_model_heavy: str = Field("gemini-3.1-pro-preview", alias="LLM_MODEL_HEAVY")
+    # Cheaper/faster model for low-stakes structured calls (intent guard, contextualize,
+    # decompose, preference merge, report-command parse) — reserves the main model for
+    # quality-critical SQL/report generation, and spreads free-tier rate-limit load.
+    llm_model_cheap: str = Field("gemini-2.5-flash-lite", alias="LLM_MODEL_CHEAP")
     embedding_model: str = Field("models/gemini-embedding-001", alias="EMBEDDING_MODEL")
 
     # --- Agent behavior ---

@@ -37,7 +37,7 @@ def _fallback_merge(current: str, instruction: str) -> str:
 
 def _merge_preferences(current: str, instruction: str, deps: AgentDeps) -> str:
     """Fold ``instruction`` into the ``current`` compact preference text (LLM, with fallback)."""
-    chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    chat = get_chat_model(temperature=0.0, settings=deps.settings, cheap=True)
     human = f"Current preferences: {current or '(none yet)'}\n\nNew instruction: {instruction}"
     try:
         reply = resilient_invoke(

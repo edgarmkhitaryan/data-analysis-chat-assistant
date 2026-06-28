@@ -62,7 +62,7 @@ _SYSTEM = (
 def decompose(state: AgentState, deps: AgentDeps) -> dict:
     """Detect a compound question and split it into self-contained sub-questions."""
     question = state["question"]
-    chat = get_chat_model(temperature=0.0, settings=deps.settings)
+    chat = get_chat_model(temperature=0.0, settings=deps.settings, cheap=True)
     try:
         result: Decomposition = resilient_invoke(
             chat.with_structured_output(Decomposition),
